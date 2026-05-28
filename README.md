@@ -32,6 +32,15 @@ agent-wallet start raw_secret \
 | **`x402-cli pay <url>`** | The payer | Hits a URL, and if the server returns `402 Payment Required`, the cli signs + submits the payment + retrieves the response. |
 | **`x402-cli serve`** | The recipient | Starts a local `402` paywall endpoint that only returns content after a valid payment is settled. |
 | **`x402-cli roundtrip`** | Self-test / one-shot transfer | Spins up a `serve` in the background, runs `pay` against it, and tears it down. **The fastest way to make a payment from the command line** — and the easiest way to verify your install end-to-end. |
+| **`x402-cli gateway search <query>`** | API consumer / agent runtime | Searches an x402-gateway catalog (`dist/skills.json`) to find a matching paid capability before calling it. |
+
+Gateway catalog search can read a local file or HTTPS URL:
+
+```bash
+export X402_GATEWAY_CATALOG=https://gateway.example.com/dist/skills.json
+x402-cli gateway search "weather"
+x402-cli gateway search "weather" --json
+```
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet
 

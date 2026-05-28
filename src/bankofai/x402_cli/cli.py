@@ -2,6 +2,7 @@
 """x402-cli — serve or pay x402 endpoints."""
 
 import asyncio
+import json
 import logging
 import subprocess
 import time
@@ -9,6 +10,7 @@ import time
 import click
 
 from bankofai.x402_cli import __version__, _tron_patch
+from bankofai.x402_cli.gateway_search import default_catalog, search_gateway_catalog
 from bankofai.x402_cli.output import OutputMode
 from bankofai.x402_cli.server_cmd import cmd_server
 from bankofai.x402_cli.client_cmd import cmd_client
@@ -55,6 +57,97 @@ def cli() -> None:
     See https://github.com/BofAI/x402-cli for the full guide.
     """
     setup_logging()
+
+
+@cli.group()
+def gateway() -> None:
+    """Discover and use x402-gateway provider catalogs."""
+
+
+@gateway.command("search")
+@click.argument("query")
+@click.option(
+    "--catalog",
+    type=str,
+    default=None,
+    help=(
+        "Catalog source: local dist/skills.json or HTTPS URL. "
+        "Defaults to $X402_GATEWAY_CATALOG or dist/skills.json."
+    ),
+)
+@click.option("--limit", "-n", type=int, default=10, help="Maximum result count.")
+@click.option(
+    "--include-blocked",
+    is_flag=True,
+    help="Include providers whose catalog verdict is blocked.",
+)
+@click.option("--json", "output_json", is_flag=True, help="Print machine-readable JSON.")
+def gateway_search(
+    query: str,
+    catalog: str | None,
+    limit: int,
+    include_blocked: bool,
+    output_json: bool,
+) -> None:
+    """Search an x402-gateway catalog for capabilities.
+
+    Example:
+      x402-cli gateway search "weather"
+    """
+    catalog_source = catalog or default_catalog()
+    try:
+        hits = search_gateway_catalog(
+            query,
+            catalog=catalog_source,
+            limit=limit,
+            include_blocked=include_blocked,
+        )
+    except Exception as exc:
+        raise click.ClickException(f"gateway search failed: {exc}") from exc
+
+    if output_json:
+        click.echo(
+            json.dumps(
+                {
+                    "query": query,
+                    "catalog": catalog_source,
+                    "count": len(hits),
+                    "results": [hit.to_dict() for hit in hits],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+
+    if not hits:
+        click.echo("no matches")
+        raise click.exceptions.Exit(code=1)
+
+    for hit in hits:
+        tags = ",".join(hit.tags) if hit.tags else "-"
+        click.echo(
+            f"{hit.fqn:32s}  score={hit.score:<3d}  "
+            f"category={hit.category:12s}  tags={tags}"
+        )
+        click.echo(f"  {hit.title}")
+        if hit.description:
+            click.echo(f"  {hit.description}")
+        if hit.service_url:
+            click.echo(f"  service: {hit.service_url}")
+        for endpoint in hit.endpoints[:3]:
+            method = str(endpoint.get("method") or "")
+            path = str(endpoint.get("path") or "")
+            paid = endpoint.get("paid")
+            suffix = ""
+            if isinstance(paid, dict):
+                suffix = (
+                    f"  {paid.get('network', '')} "
+                    f"{paid.get('currency', '')} "
+                    f"{paid.get('amount_raw', '')}"
+                ).rstrip()
+            click.echo(f"  {method:6s} {path}{suffix}")
+        click.echo("")
 
 
 @cli.command()
