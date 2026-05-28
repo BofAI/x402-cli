@@ -2,6 +2,8 @@
 
 The BankofAI command-line client for the x402 protocol — pay any x402-protected URL, run your own paywall, or test the full handshake locally. **No code required.**
 
+`x402-cli` is the developer tool for one-off payment tests. For production provider onboarding with `providers/**/provider.yml`, use [`x402-gateway`](https://github.com/BofAI/x402-gateway). Both projects depend on the same [`bankofai-x402`](https://github.com/BofAI/x402) SDK.
+
 ## 1. Install
 
 ```bash

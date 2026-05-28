@@ -23,7 +23,7 @@ dependencies = [
   # TokenRegistry → AssetRegistry rename on the SDK's dev/v2 branch).
   # web3 / tronpy are pulled in via the SDK's [evm,tron] extras so the SDK
   # owns those version ranges (cli code never imports them directly).
-  "bankofai-x402[evm,tron]>=0.5.9,<0.6",
+  "bankofai-x402[evm,tron]>=0.6.0,<0.7",
   "bankofai-agent-wallet>=2.4,<3",
   # CLI's own runtime stack — only libs that cli source directly imports.
   # Bound major version to defend against breaking bumps.
