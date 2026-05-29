@@ -34,12 +34,36 @@ agent-wallet start raw_secret \
 | **`x402-cli roundtrip`** | Self-test / one-shot transfer | Spins up a `serve` in the background, runs `pay` against it, and tears it down. **The fastest way to make a payment from the command line** — and the easiest way to verify your install end-to-end. |
 | **`x402-cli gateway search <query>`** | API consumer / agent runtime | Searches an x402-gateway catalog (`dist/skills.json`) to find a matching paid capability before calling it. |
 
-Gateway catalog search can read a local file or HTTPS URL:
+Gateway catalog search can read a local file or HTTPS URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
 
 ```bash
 export X402_GATEWAY_CATALOG=https://gateway.example.com/dist/skills.json
 x402-cli gateway search "weather"
 x402-cli gateway search "weather" --json
+```
+
+For local gateway development:
+
+```bash
+cd ../x402-gateway
+docker compose up --build -d gateway
+docker compose --profile tools run --rm catalog-build
+
+cd ../x402-cli
+PYTHONPATH=src python -m bankofai.x402_cli.cli gateway search \
+  "weather" \
+  --catalog ../x402-gateway/dist/skills.json
+```
+
+Expected flow with the gateway:
+
+```text
+Natural-language intent
+  -> x402-cli gateway search
+  -> provider endpoint from the catalog
+  -> x402-cli pay <gateway endpoint>
+  -> x402 SDK handles the 402 challenge and payment retry
+  -> upstream API result
 ```
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet
