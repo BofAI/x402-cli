@@ -10,6 +10,7 @@ import time
 import click
 
 from bankofai.x402_cli import __version__, _tron_patch
+from bankofai.x402_cli.catalog_cmd import catalog as catalog_app
 from bankofai.x402_cli.gateway_search import default_catalog, search_gateway_catalog
 from bankofai.x402_cli.output import OutputMode
 from bankofai.x402_cli.server_cmd import cmd_server
@@ -57,6 +58,9 @@ def cli() -> None:
     See https://github.com/BofAI/x402-cli for the full guide.
     """
     setup_logging()
+
+
+cli.add_command(catalog_app, name="catalog")
 
 
 @cli.group()

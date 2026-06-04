@@ -41,7 +41,10 @@ class GatewaySearchHit:
 
 
 def default_catalog() -> str:
-    return os.environ.get("X402_GATEWAY_CATALOG", "dist/skills.json")
+    return os.environ.get(
+        "X402_CATALOG",
+        os.environ.get("X402_GATEWAY_CATALOG", "https://catalog.bankofai.io/api/catalog.json"),
+    )
 
 
 def _read_json(source: str) -> dict[str, Any]:
@@ -55,7 +58,8 @@ def _read_json(source: str) -> dict[str, Any]:
 def _provider_detail_source(catalog_source: str, fqn: str) -> str:
     filename = f"{fqn.replace('/', '__')}.json"
     if catalog_source.startswith(("http://", "https://")):
-        return urljoin(catalog_source, f"providers/{filename}")
+        base = catalog_source.rsplit("/", 1)[0].rstrip("/") + "/"
+        return urljoin(base, f"providers/{filename}")
     catalog_path = Path(catalog_source)
     return str(catalog_path.parent / "providers" / filename)
 
@@ -83,14 +87,14 @@ FIELD_WEIGHTS = {
 def _score(terms: list[str], fields: dict[str, list[str]]) -> tuple[int, list[str]]:
     score = 0
     matched: list[str] = []
-    for field, values in fields.items():
+    for field_name, values in fields.items():
         haystack = " ".join(str(value) for value in values if value is not None).lower()
         if not haystack:
             continue
         count = sum(1 for term in terms if term in haystack)
         if count:
-            score += FIELD_WEIGHTS.get(field, 1) * count
-            matched.append(field)
+            score += FIELD_WEIGHTS.get(field_name, 1) * count
+            matched.append(field_name)
     return score, matched
 
 
@@ -113,6 +117,13 @@ def _endpoint_fields(endpoints: list[dict[str, Any]]) -> list[str]:
                     str(paid.get("amount_raw") or ""),
                 ]
             )
+        values.extend(
+            [
+                str(endpoint.get("title") or ""),
+                str(endpoint.get("description") or ""),
+                str(endpoint.get("use_case") or endpoint.get("useCase") or ""),
+            ]
+        )
     return values
 
 
@@ -138,7 +149,13 @@ def search_gateway_catalog(
             continue
 
         detail = _read_provider_detail(catalog_source, fqn)
-        tags = list(detail.get("tags") or provider.get("tags") or [])
+        tags = list(
+            detail.get("featured_tags")
+            or provider.get("featured_tags")
+            or detail.get("tags")
+            or provider.get("tags")
+            or []
+        )
         endpoints = list(detail.get("endpoints") or [])
         fields = {
             "fqn": [fqn],
@@ -148,7 +165,7 @@ def search_gateway_catalog(
                 str(detail.get("service_url") or provider.get("service_url") or "")
             ],
             "description": [str(detail.get("description") or "")],
-            "use_case": [str(detail.get("use_case") or "")],
+            "use_case": [str(detail.get("use_case") or detail.get("useCase") or "")],
             "tags": [str(tag) for tag in tags],
             "endpoints": _endpoint_fields(endpoints),
         }
