@@ -32,14 +32,18 @@ agent-wallet start raw_secret \
 | **`x402-cli pay <url>`** | The payer | Hits a URL, and if the server returns `402 Payment Required`, the cli signs + submits the payment + retrieves the response. |
 | **`x402-cli serve`** | The recipient | Starts a local `402` paywall endpoint that only returns content after a valid payment is settled. |
 | **`x402-cli roundtrip`** | Self-test / one-shot transfer | Spins up a `serve` in the background, runs `pay` against it, and tears it down. **The fastest way to make a payment from the command line** — and the easiest way to verify your install end-to-end. |
-| **`x402-cli gateway search <query>`** | API consumer / agent runtime | Searches an x402-gateway catalog (`dist/skills.json`) to find a matching paid capability before calling it. |
+| **`x402-cli catalog search <query>`** | API consumer / agent runtime | Searches the public x402 catalog to find a matching paid capability before calling it. |
+| **`x402-cli catalog export-gateway <url> --provider <fqn>`** | API provider | Exports public `catalog.json` and `pay.md` files from a self-hosted gateway for PR submission. |
 
-Gateway catalog search can read a local file or HTTPS URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
+Catalog search can read the hosted catalog, a local `dist/catalog.json`, or a gateway-exported catalog URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
 
 ```bash
-export X402_GATEWAY_CATALOG=https://gateway.example.com/dist/skills.json
-x402-cli gateway search "weather"
-x402-cli gateway search "weather" --json
+export X402_CATALOG=https://catalog.bankofai.io/api/catalog.json
+x402-cli catalog update
+x402-cli catalog search "weather"
+x402-cli catalog show acme-weather
+x402-cli catalog endpoints acme-weather
+x402-cli catalog pay-json acme-weather
 ```
 
 For local gateway development:
@@ -50,21 +54,39 @@ docker compose up --build -d gateway
 docker compose --profile tools run --rm catalog-build
 
 cd ../x402-cli
-PYTHONPATH=src python -m bankofai.x402_cli.cli gateway search \
+PYTHONPATH=src python -m bankofai.x402_cli.cli catalog search \
   "weather" \
-  --catalog ../x402-gateway/dist/skills.json
+  --catalog ../x402-catelog/dist/catalog.json
 ```
 
 Expected flow with the gateway:
 
 ```text
 Natural-language intent
-  -> x402-cli gateway search
+  -> x402-cli catalog search
+  -> x402-cli catalog show/endpoints/pay-json
   -> provider endpoint from the catalog
   -> x402-cli pay <gateway endpoint>
   -> x402 SDK handles the 402 challenge and payment retry
   -> upstream API result
 ```
+
+Provider onboarding flow:
+
+```bash
+x402-cli catalog export-gateway https://gateway.example.com \
+  --provider acme-weather \
+  --output-dir providers/acme-weather
+```
+
+The command writes public PR files only:
+
+```text
+providers/acme-weather/catalog.json
+providers/acme-weather/pay.md
+```
+
+Do not submit `provider.yml`, `.env`, upstream API keys, bearer tokens, or passwords.
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet
 

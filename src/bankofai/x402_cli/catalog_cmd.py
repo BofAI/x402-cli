@@ -140,6 +140,8 @@ def _pay_markdown_from_detail(detail: dict[str, Any]) -> str:
         "",
     ]
     for endpoint in detail.get("endpoints", []):
+        metered = bool(endpoint.get("metered"))
+        price = endpoint.get("min_price_usd")
         lines.extend(
             [
                 f"### {endpoint.get('method')} {endpoint.get('path')}",
@@ -147,14 +149,22 @@ def _pay_markdown_from_detail(detail: dict[str, Any]) -> str:
                 endpoint.get("description") or "",
                 "",
                 f"- URL: `{endpoint.get('url')}`",
-                f"- Price: `${endpoint.get('min_price_usd')}`",
-                "",
-                "```bash",
-                f"x402-cli pay '{endpoint.get('url')}'",
-                "```",
+                f"- Metered: `{str(metered).lower()}`",
+                f"- Price: `${price}`",
                 "",
             ]
         )
+        if metered:
+            lines.extend(
+                [
+                    "```bash",
+                    f"x402-cli pay '{endpoint.get('url')}'",
+                    "```",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(["No payment required.", ""])
     lines.extend(
         [
             "## Notes",
