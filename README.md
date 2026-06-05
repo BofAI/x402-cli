@@ -4,6 +4,8 @@ The BankofAI command-line client for the x402 protocol — pay any x402-protecte
 
 `x402-cli` is the single user-facing entrypoint. It includes payment commands, public catalog discovery, and provider gateway operations under one command tree. The gateway runtime is packaged underneath the CLI, so most users only install and remember `x402-cli`.
 
+Community copy-paste examples live in [`examples/README.md`](examples/README.md).
+
 ## 1. Install
 
 ```bash
