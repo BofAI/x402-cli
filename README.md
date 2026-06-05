@@ -2,12 +2,12 @@
 
 The BankofAI command-line client for the x402 protocol — pay any x402-protected URL, run your own paywall, or test the full handshake locally. **No code required.**
 
-`x402-cli` is the developer tool for one-off payment tests. For production provider onboarding with `providers/**/provider.yml`, use [`x402-gateway`](https://github.com/BofAI/x402-gateway). Both projects depend on the same [`bankofai-x402`](https://github.com/BofAI/x402) SDK.
+`x402-cli` is the single user-facing entrypoint. It includes payment commands, public catalog discovery, and provider gateway operations under one command tree. The gateway runtime is packaged underneath the CLI, so most users only install and remember `x402-cli`.
 
 ## 1. Install
 
 ```bash
-pip install --pre bankofai-x402-cli
+pip install bankofai-x402-cli==0.6.1b1
 x402-cli --version
 ```
 
@@ -33,6 +33,7 @@ agent-wallet start raw_secret \
 | **`x402-cli serve`** | The recipient | Starts a local `402` paywall endpoint that only returns content after a valid payment is settled. |
 | **`x402-cli roundtrip`** | Self-test / one-shot transfer | Spins up a `serve` in the background, runs `pay` against it, and tears it down. **The fastest way to make a payment from the command line** — and the easiest way to verify your install end-to-end. |
 | **`x402-cli catalog search <query>`** | API consumer / agent runtime | Searches the public x402 catalog to find a matching paid capability before calling it. |
+| **`x402-cli gateway start ...`** | API provider | Starts a self-hosted provider gateway from local `provider.yml` files. |
 | **`x402-cli catalog export-gateway <url> --provider <fqn>`** | API provider | Exports public `catalog.json` and `pay.md` files from a self-hosted gateway for PR submission. |
 
 Catalog search can read the hosted catalog, a local `dist/catalog.json`, or a gateway-exported catalog URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
@@ -49,14 +50,12 @@ x402-cli catalog pay-json acme-weather
 For local gateway development:
 
 ```bash
-cd ../x402-gateway
-docker compose up --build -d gateway
-docker compose --profile tools run --rm catalog-build
+x402-cli gateway scaffold acme-weather \
+  --output-dir providers/acme-weather \
+  --forward-url https://api.example.com
 
-cd ../x402-cli
-PYTHONPATH=src python -m bankofai.x402_cli.cli catalog search \
-  "weather" \
-  --catalog ../x402-catelog/dist/catalog.json
+x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
 ```
 
 Expected flow with the gateway:
@@ -74,6 +73,9 @@ Natural-language intent
 Provider onboarding flow:
 
 ```bash
+x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
+
 x402-cli catalog export-gateway https://gateway.example.com \
   --provider acme-weather \
   --output-dir providers/acme-weather
@@ -87,6 +89,16 @@ providers/acme-weather/pay.md
 ```
 
 Do not submit `provider.yml`, `.env`, upstream API keys, bearer tokens, or passwords.
+
+Provider catalog build commands are also under `x402-cli`:
+
+```bash
+x402-cli gateway catalog generate providers/acme-weather/provider.yml
+x402-cli gateway catalog pay-assets providers/acme-weather/provider.yml
+x402-cli gateway catalog check providers
+x402-cli gateway catalog build providers --dist-dir dist
+x402-cli gateway catalog search providers weather
+```
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet
 

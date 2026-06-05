@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bankofai-x402-cli"
-version = "0.6.1b0"
+version = "0.6.1b1"
 description = "x402-cli — one-shot BankofAI x402 CLI: serve a 402 payment endpoint, or pay one as a client."
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,6 +25,7 @@ dependencies = [
   # owns those version ranges (cli code never imports them directly).
   "bankofai-x402[evm,tron]>=0.6.0,<0.7",
   "bankofai-agent-wallet>=2.4,<3",
+  "bankofai-x402-gateway>=0.6.1b0,<0.7",
   # CLI's own runtime stack — only libs that cli source directly imports.
   # Bound major version to defend against breaking bumps.
   "click>=8.1.0,<10",

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
+import bankofai.x402_cli.cli as cli_module
 from bankofai.x402_cli.cli import cli
 from bankofai.x402_cli.gateway_search import search_gateway_catalog
 
@@ -95,3 +97,44 @@ def test_gateway_search_cli_no_match(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "no matches" in result.output
+
+
+def test_gateway_commands_forward_to_gateway_module(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args, check=False):
+        calls.append(list(args))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+    runner = CliRunner()
+
+    start = runner.invoke(cli, ["gateway", "start", "--providers-dir", "providers"])
+    catalog = runner.invoke(
+        cli,
+        ["gateway", "catalog", "build", "providers", "--dist-dir", "dist"],
+    )
+
+    assert start.exit_code == 0
+    assert catalog.exit_code == 0
+    assert calls == [
+        [
+            cli_module.sys.executable,
+            "-m",
+            "bankofai.x402_gateway",
+            "server",
+            "start",
+            "--providers-dir",
+            "providers",
+        ],
+        [
+            cli_module.sys.executable,
+            "-m",
+            "bankofai.x402_gateway",
+            "catalog",
+            "build",
+            "providers",
+            "--dist-dir",
+            "dist",
+        ],
+    ]

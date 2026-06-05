@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import sys
 import time
 
 import click
@@ -62,10 +63,27 @@ def cli() -> None:
 
 cli.add_command(catalog_app, name="catalog")
 
+gateway = click.Group(
+    name="gateway",
+    help=(
+        "Run a self-hosted x402 gateway and build provider onboarding assets. "
+        "Use `x402-cli catalog ...` for public marketplace search."
+    ),
+)
 
-@cli.group()
-def gateway() -> None:
-    """Discover and use x402-gateway provider catalogs."""
+GATEWAY_FORWARD_CONTEXT = {
+    "ignore_unknown_options": True,
+    "allow_extra_args": True,
+    "help_option_names": [],
+}
+
+
+def _run_gateway_command(*args: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "bankofai.x402_gateway", *args],
+        check=False,
+    )
+    raise click.exceptions.Exit(code=result.returncode)
 
 
 @gateway.command("search")
@@ -152,6 +170,37 @@ def gateway_search(
                 ).rstrip()
             click.echo(f"  {method:6s} {path}{suffix}")
         click.echo("")
+
+
+@gateway.command("start", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_start(args: tuple[str, ...]) -> None:
+    """Start a self-hosted provider gateway."""
+    _run_gateway_command("server", "start", *args)
+
+
+@gateway.command("check", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_check(args: tuple[str, ...]) -> None:
+    """Validate a local provider.yml file."""
+    _run_gateway_command("server", "check", *args)
+
+
+@gateway.command("scaffold", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_scaffold(args: tuple[str, ...]) -> None:
+    """Write a starter provider.yml file."""
+    _run_gateway_command("server", "scaffold", *args)
+
+
+@gateway.command("catalog", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_catalog(args: tuple[str, ...]) -> None:
+    """Run provider catalog build/check/pay-assets commands."""
+    _run_gateway_command("catalog", *args)
+
+
+cli.add_command(gateway, name="gateway")
 
 
 @cli.command()
