@@ -51,8 +51,12 @@ def _read_json(source: str) -> dict[str, Any]:
     if source.startswith(("http://", "https://")):
         response = httpx.get(source, timeout=10.0)
         response.raise_for_status()
-        return response.json()
-    return json.loads(Path(source).read_text())
+        payload = response.json()
+    else:
+        payload = json.loads(Path(source).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected JSON object from {source}")
+    return payload
 
 
 def _provider_detail_source(catalog_source: str, fqn: str) -> str:

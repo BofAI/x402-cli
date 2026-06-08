@@ -25,8 +25,12 @@ def _read_json(source: str) -> dict[str, Any]:
     if source.startswith(("http://", "https://")):
         response = httpx.get(source, timeout=15.0)
         response.raise_for_status()
-        return response.json()
-    return json.loads(Path(source).read_text(encoding="utf-8"))
+        payload = response.json()
+    else:
+        payload = json.loads(Path(source).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected JSON object from {source}")
+    return payload
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
