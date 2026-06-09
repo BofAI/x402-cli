@@ -36,9 +36,35 @@ def _write_catalog(tmp_path: Path) -> Path:
             {
                 "fqn": "acme/weather",
                 "title": "Acme Weather",
+                "title_zh": "Acme 天气",
+                "main_title": "Acme Weather",
+                "sub_title": "城市天气",
                 "category": "data",
+                "category_meta": {
+                    "id": "data",
+                    "label": "Data",
+                    "label_zh": "数据",
+                },
+                "chains": ["eip155:97"],
+                "chain_kinds": ["bnb"],
+                "chains_meta": [
+                    {
+                        "id": "eip155:97",
+                        "kind": "bnb",
+                        "label": "BNB Smart Chain Testnet",
+                        "label_zh": "BNB 测试网",
+                    }
+                ],
                 "description": "Current weather data",
                 "use_case": "Look up current weather for a city",
+                "i18n": {
+                    "zh-CN": {
+                        "title": "Acme 天气",
+                        "subtitle": "城市天气",
+                        "description": "查询城市天气数据",
+                        "useCase": "适合查询城市实时天气",
+                    }
+                },
                 "service_url": "https://gw.example.com/providers/weather",
                 "tags": ["weather", "forecast"],
                 "endpoints": [
@@ -75,6 +101,21 @@ def test_search_gateway_catalog_reads_dist_details(tmp_path: Path) -> None:
     assert hits[0].fqn == "acme/weather"
     assert hits[0].endpoints[0]["path"] == "/v1/current"
     assert "description" in hits[0].matched_fields
+    assert hits[0].chain_kinds == ["bnb"]
+    assert hits[0].category_meta == {"id": "data", "label": "Data", "label_zh": "数据"}
+
+
+def test_search_gateway_catalog_matches_frontend_metadata(tmp_path: Path) -> None:
+    catalog = _write_catalog(tmp_path)
+
+    chain_hits = search_gateway_catalog("bnb", catalog=str(catalog))
+    zh_hits = search_gateway_catalog("天气", catalog=str(catalog))
+    category_hits = search_gateway_catalog("数据", catalog=str(catalog))
+
+    assert [hit.fqn for hit in chain_hits] == ["acme/weather"]
+    assert [hit.fqn for hit in zh_hits] == ["acme/weather"]
+    assert [hit.fqn for hit in category_hits] == ["acme/weather"]
+    assert "chain_kinds" in chain_hits[0].matched_fields
 
 
 def test_gateway_search_cli_json(tmp_path: Path) -> None:

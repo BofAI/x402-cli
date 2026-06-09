@@ -20,6 +20,13 @@ class GatewaySearchHit:
     service_url: str
     description: str | None = None
     use_case: str | None = None
+    title_zh: str | None = None
+    main_title: str | None = None
+    sub_title: str | None = None
+    category_meta: dict[str, Any] | None = None
+    chains: list[str] = field(default_factory=list)
+    chain_kinds: list[str] = field(default_factory=list)
+    chains_meta: list[dict[str, Any]] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     endpoints: list[dict[str, Any]] = field(default_factory=list)
     score: int = 0
@@ -33,6 +40,13 @@ class GatewaySearchHit:
             "serviceUrl": self.service_url,
             "description": self.description,
             "useCase": self.use_case,
+            "title_zh": self.title_zh,
+            "main_title": self.main_title,
+            "sub_title": self.sub_title,
+            "category_meta": self.category_meta,
+            "chains": self.chains,
+            "chain_kinds": self.chain_kinds,
+            "chains_meta": self.chains_meta,
             "tags": self.tags,
             "score": self.score,
             "matchedFields": self.matched_fields,
@@ -80,8 +94,12 @@ FIELD_WEIGHTS = {
     "fqn": 12,
     "title": 10,
     "tags": 8,
+    "chain_kinds": 8,
+    "chains": 8,
     "category": 6,
+    "category_meta": 6,
     "endpoints": 6,
+    "i18n": 5,
     "description": 4,
     "use_case": 4,
     "service_url": 2,
@@ -131,6 +149,33 @@ def _endpoint_fields(endpoints: list[dict[str, Any]]) -> list[str]:
     return values
 
 
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item is not None]
+
+
+def _dict_values(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    values: list[str] = []
+    for child in value.values():
+        if isinstance(child, dict):
+            values.extend(_dict_values(child))
+        elif isinstance(child, list):
+            values.extend(str(item) for item in child if item is not None)
+        elif child is not None:
+            values.append(str(child))
+    return values
+
+
+def _chain_meta_values(chains_meta: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for chain in chains_meta:
+        values.extend(_dict_values(chain))
+    return values
+
+
 def search_gateway_catalog(
     query: str,
     *,
@@ -161,10 +206,34 @@ def search_gateway_catalog(
             or []
         )
         endpoints = list(detail.get("endpoints") or [])
+        category_meta = detail.get("category_meta") or provider.get("category_meta")
+        if not isinstance(category_meta, dict):
+            category_meta = None
+        chains = _string_list(detail.get("chains") or provider.get("chains"))
+        chain_kinds = _string_list(detail.get("chain_kinds") or provider.get("chain_kinds"))
+        chains_meta_raw = detail.get("chains_meta") or provider.get("chains_meta") or []
+        chains_meta = [
+            item for item in chains_meta_raw
+            if isinstance(item, dict)
+        ] if isinstance(chains_meta_raw, list) else []
+        title_zh = str(detail.get("title_zh") or provider.get("title_zh") or "")
+        main_title = str(detail.get("main_title") or provider.get("main_title") or "")
+        sub_title = str(detail.get("sub_title") or provider.get("sub_title") or "")
         fields = {
             "fqn": [fqn],
-            "title": [str(detail.get("title") or provider.get("title") or "")],
+            "title": [
+                str(detail.get("title") or provider.get("title") or ""),
+                main_title,
+            ],
+            "i18n": [
+                title_zh,
+                sub_title,
+                *_dict_values(detail.get("i18n") or provider.get("i18n")),
+            ],
             "category": [str(detail.get("category") or provider.get("category") or "")],
+            "category_meta": _dict_values(category_meta),
+            "chains": [*chains, *_chain_meta_values(chains_meta)],
+            "chain_kinds": chain_kinds,
             "service_url": [
                 str(detail.get("service_url") or provider.get("service_url") or "")
             ],
@@ -184,6 +253,13 @@ def search_gateway_catalog(
                 service_url=fields["service_url"][0],
                 description=fields["description"][0] or None,
                 use_case=fields["use_case"][0] or None,
+                title_zh=title_zh or None,
+                main_title=main_title or None,
+                sub_title=sub_title or None,
+                category_meta=category_meta,
+                chains=chains,
+                chain_kinds=chain_kinds,
+                chains_meta=chains_meta,
                 tags=tags,
                 endpoints=endpoints,
                 score=score,
