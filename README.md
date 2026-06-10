@@ -1,5 +1,44 @@
 # `x402-cli`
 
+## 中文说明
+
+`x402-cli` 是用户侧唯一需要记住的命令入口。它集成了三类能力：
+
+- `x402-cli pay <url>`：调用 x402 付费接口，自动处理 402 challenge、签名和重试。
+- `x402-cli catalog ...`：搜索公开 Catalog，找到适合的 API、endpoint、价格和调用说明。
+- `x402-cli gateway ...`：服务方本地启动 Gateway、校验 provider、导出公开 Catalog PR 文件。
+
+安装：
+
+```bash
+pip install bankofai-x402-cli==0.6.1b1
+x402-cli --version
+```
+
+典型使用流程：
+
+```bash
+x402-cli catalog update
+x402-cli catalog search "weather"
+x402-cli catalog show acme-weather
+x402-cli catalog endpoints acme-weather
+x402-cli pay 'https://gateway.example.com/providers/acme-weather/v1/current?city=Shanghai'
+```
+
+服务方提交流程：
+
+```bash
+x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
+x402-cli catalog export-gateway https://gateway.example.com \
+  --provider acme-weather \
+  --output-dir providers/acme-weather
+```
+
+只把导出的 `catalog.json` 和 `pay.md` 提交到 `x402-catelog`。不要提交 `provider.yml`、`.env`、API key、bearer token 或钱包私钥。
+
+## English
+
 The BankofAI command-line client for the x402 protocol — pay any x402-protected URL, run your own paywall, or test the full handshake locally. **No code required.**
 
 `x402-cli` is the single user-facing entrypoint. It includes payment commands, public catalog discovery, and provider gateway operations under one command tree. The gateway runtime is packaged underneath the CLI, so most users only install and remember `x402-cli`.

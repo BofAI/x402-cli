@@ -1,5 +1,32 @@
 # x402-cli Community Examples
 
+## 中文说明
+
+这里是社区用户使用 `x402-cli` 的复制粘贴示例。`x402-cli` 是唯一用户入口，支付、Catalog 搜索、Gateway 操作都在这一个命令下。
+
+常用流程：
+
+```bash
+pip install bankofai-x402-cli==0.6.1b1
+x402-cli catalog update
+x402-cli catalog search "weather"
+x402-cli catalog show acme-weather
+x402-cli catalog endpoints acme-weather
+x402-cli pay 'https://gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+```
+
+服务方导出公开 PR 文件：
+
+```bash
+x402-cli catalog export-gateway https://gateway.example.com \
+  --provider acme-weather \
+  --output-dir providers/acme-weather
+```
+
+只提交 `catalog.json` 和 `pay.md`，不要提交 `provider.yml`、`.env` 或任何密钥。
+
+## English
+
 This directory shows the common ways a community user should use `x402-cli`.
 The CLI is the only user-facing entrypoint: payment, catalog discovery, and
 gateway operations all live under `x402-cli`.

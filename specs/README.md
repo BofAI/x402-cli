@@ -1,5 +1,20 @@
 # x402-cli Specifications
 
+## 中文说明
+
+这里是 `x402-cli` 的设计和协议参考文档，主要给维护者和贡献者使用。普通用户优先阅读仓库根目录的 `README.md` 和 `examples/README.md`。
+
+阅读顺序：
+
+1. `../README.md`：了解安装、搜索、支付和 Gateway 操作。
+2. `server.md`：了解本地付费服务端如何暴露 payment requirement。
+3. `client.md`：了解客户端如何探测 402、签名并重试。
+4. `smoke-tests.md`：了解如何验证核心流程。
+
+如果文档和当前 CLI 行为不一致，以代码、测试和 CHANGELOG 为准，然后再更新规格文档。
+
+## English
+
 Design documents and protocol specifications for the x402-cli CLI.
 
 ## Contents
