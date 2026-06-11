@@ -7,12 +7,12 @@
 常用流程：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b2
+pip install bankofai-x402-cli==0.6.1b3
 x402-cli catalog update
 x402-cli catalog search "weather"
 x402-cli catalog show acme-weather
 x402-cli catalog endpoints acme-weather
-x402-cli pay 'https://gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
 ```
 
 服务方导出公开 PR 文件：
@@ -34,14 +34,14 @@ gateway operations all live under `x402-cli`.
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b2
+pip install bankofai-x402-cli==0.6.1b3
 x402-cli --version
 ```
 
 Expected:
 
 ```text
-x402-cli, version 0.6.1b2
+x402-cli, version 0.6.1b3
 ```
 
 ## 2. Find a Paid API
@@ -69,14 +69,14 @@ x402-cli catalog search "weather" \
 After choosing an endpoint from the catalog:
 
 ```bash
-x402-cli pay 'https://gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
 ```
 
 For a dry run that reads the payment requirement without signing:
 
 ```bash
 x402-cli pay \
-  'https://gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai' \
+  'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai' \
   --dry-run \
   --json
 ```
@@ -127,7 +127,7 @@ Agents should use the catalog first, then call the selected endpoint:
 ```bash
 x402-cli catalog search "current weather for a city" --json
 x402-cli catalog pay-json acme-weather
-x402-cli pay 'https://gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
 ```
 
 The catalog response gives the provider FQN, endpoint URL, price range, chains,

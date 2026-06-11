@@ -88,7 +88,7 @@ def _submission_catalog(detail: dict[str, Any]) -> dict[str, Any]:
         "description": description,
         "useCase": use_case,
         "i18n": detail.get("i18n") or {"zh-CN": _zh_copy(title, subtitle, description, use_case)},
-        "logo": detail.get("logo") or "https://catalog.bankofai.io/assets/providers/default.png",
+        "logo": detail.get("logo") or "https://tm-x402-catelog.bankofai.io/assets/providers/default.png",
         "category": detail.get("category") or "other",
         "chains": detail.get("chains") or [],
         "isFirstParty": bool(detail.get("is_first_party")),

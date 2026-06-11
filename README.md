@@ -11,7 +11,7 @@
 安装：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b2
+pip install bankofai-x402-cli==0.6.1b3
 x402-cli --version
 ```
 
@@ -48,7 +48,7 @@ Community copy-paste examples live in [`examples/README.md`](examples/README.md)
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b2
+pip install bankofai-x402-cli==0.6.1b3
 x402-cli --version
 ```
 
@@ -80,7 +80,7 @@ agent-wallet start raw_secret \
 Catalog search can read the hosted catalog, a local `dist/catalog.json`, or a gateway-exported catalog URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
 
 ```bash
-export X402_CATALOG=https://catalog.bankofai.io/api/catalog.json
+export X402_CATALOG=https://tm-x402-catelog.bankofai.io/api/catalog.json
 x402-cli catalog update
 x402-cli catalog search "weather"
 x402-cli catalog show acme-weather
