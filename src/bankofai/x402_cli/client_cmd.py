@@ -1,5 +1,6 @@
 """Client command implementation."""
 
+import json
 import logging
 import os
 from typing import Any
@@ -26,6 +27,16 @@ logger = logging.getLogger(__name__)
 PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE"
 PAYMENT_REQUIRED_HEADER = "PAYMENT-REQUIRED"
 PAYMENT_RESPONSE_HEADER = "PAYMENT-RESPONSE"
+
+
+def _response_payload(response: httpx.Response) -> Any:
+    content_type = response.headers.get("content-type", "")
+    if "json" in content_type.lower():
+        try:
+            return response.json()
+        except ValueError:
+            return response.text
+    return response.text
 
 
 async def cmd_client(
@@ -72,6 +83,7 @@ async def cmd_client(
                     "url": url,
                     "status": response.status_code,
                     "message": "Not a payment-required endpoint",
+                    "response": _response_payload(response),
                 }
                 emit(
                     command="client",
@@ -221,13 +233,13 @@ async def cmd_client(
                 "asset": selected.asset,
                 "amount": selected.amount,
                 "paid": True,
+                "response": _response_payload(retry_response),
             }
 
             # Parse response header if available
             response_header = retry_response.headers.get(PAYMENT_RESPONSE_HEADER)
             if response_header:
                 try:
-                    import json
                     import base64
                     decoded_bytes = base64.b64decode(response_header)
                     response_data = json.loads(decoded_bytes.decode('utf-8'))
@@ -301,4 +313,3 @@ def _register_client_mechanisms(
                         client.register(network, mechanism)
             except Exception as err:
                 logger.warning(f"Failed to register {scheme} mechanism for {network}: {err}")
-

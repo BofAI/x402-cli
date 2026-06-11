@@ -5,7 +5,7 @@
 ## Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b3
+pip install bankofai-x402-cli==0.6.1b4
 x402-cli --version
 python -c "import bankofai.x402_cli.mcp_server; print('x402-mcp ready')"
 ```

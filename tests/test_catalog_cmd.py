@@ -17,6 +17,7 @@ def _write_public_catalog(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "version": 1,
+                "base_url": "https://catalog.example.com/api",
                 "provider_count": 1,
                 "providers": [
                     {
@@ -127,7 +128,61 @@ def test_catalog_update_caches_catalog(
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["providerCount"] == 1
+    assert payload["detailCount"] == 0
+    assert payload["payCount"] == 0
     assert (cache_root / "catalog.json").exists()
+
+
+def test_catalog_update_caches_remote_detail_and_pay_files(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(catalog_cmd, "cache_dir", lambda: cache_root)
+
+    catalog_payload = json.loads(_write_public_catalog(tmp_path).read_text())
+    detail_payload = json.loads((tmp_path / "dist" / "providers" / "acme-weather.json").read_text())
+    pay_payload = json.loads((tmp_path / "dist" / "pay" / "acme-weather.json").read_text())
+
+    def fake_read_json(source: str):
+        if source == "https://catalog.example.com/api/catalog.json":
+            return catalog_payload
+        if source == "https://catalog.example.com/api/providers/acme-weather.json":
+            return detail_payload
+        if source == "https://catalog.example.com/api/pay/acme-weather.json":
+            return pay_payload
+        raise AssertionError(source)
+
+    monkeypatch.setattr(catalog_cmd, "_read_json", fake_read_json)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "catalog",
+            "update",
+            "--catalog",
+            "https://catalog.example.com/api/catalog.json",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["detailCount"] == 1
+    assert payload["payCount"] == 1
+    assert (cache_root / "providers" / "acme-weather.json").exists()
+    assert (cache_root / "pay" / "acme-weather.json").exists()
+
+
+def test_catalog_detail_falls_back_to_base_url_when_local_detail_missing(tmp_path: Path) -> None:
+    catalog = _write_public_catalog(tmp_path)
+    (tmp_path / "dist" / "providers" / "acme-weather.json").unlink()
+    (tmp_path / "dist" / "pay" / "acme-weather.json").unlink()
+    assert (
+        catalog_cmd._detail_source(str(catalog), "acme-weather")
+        == "https://catalog.example.com/api/providers/acme-weather.json"
+    )
+    assert (
+        catalog_cmd._pay_source(str(catalog), "acme-weather")
+        == "https://catalog.example.com/api/pay/acme-weather.json"
+    )
 
 
 def test_catalog_export_gateway_writes_pr_files(tmp_path: Path, monkeypatch) -> None:

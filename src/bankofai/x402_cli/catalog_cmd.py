@@ -41,6 +41,10 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _provider_filename(fqn: str) -> str:
+    return f"{fqn.replace('/', '__')}.json"
+
+
 def _catalog_source(catalog: str | None) -> str:
     if catalog:
         return catalog
@@ -50,20 +54,82 @@ def _catalog_source(catalog: str | None) -> str:
     return default_catalog()
 
 
+def _remote_base_from_catalog_payload(payload: dict[str, Any]) -> str | None:
+    base_url = payload.get("base_url") or payload.get("baseUrl")
+    if isinstance(base_url, str) and base_url.startswith(("http://", "https://")):
+        return base_url.rstrip("/") + "/"
+    return None
+
+
+def _remote_base_from_source(catalog_source: str, payload: dict[str, Any] | None = None) -> str | None:
+    if payload is not None:
+        base_url = _remote_base_from_catalog_payload(payload)
+        if base_url:
+            return base_url
+    if catalog_source.startswith(("http://", "https://")):
+        return catalog_source.rsplit("/", 1)[0].rstrip("/") + "/"
+    try:
+        local_payload = _read_json(catalog_source)
+    except (OSError, ValueError, json.JSONDecodeError, httpx.HTTPError):
+        return None
+    return _remote_base_from_catalog_payload(local_payload)
+
+
 def _detail_source(catalog_source: str, fqn: str) -> str:
-    filename = f"{fqn.replace('/', '__')}.json"
+    filename = _provider_filename(fqn)
     if catalog_source.startswith(("http://", "https://")):
         base = catalog_source.rsplit("/", 1)[0].rstrip("/") + "/"
         return urljoin(base, f"providers/{filename}")
-    return str(Path(catalog_source).parent / "providers" / filename)
+    path = Path(catalog_source).parent / "providers" / filename
+    if path.exists():
+        return str(path)
+    remote_base = _remote_base_from_source(catalog_source)
+    if remote_base:
+        return urljoin(remote_base, f"providers/{filename}")
+    return str(path)
 
 
 def _pay_source(catalog_source: str, fqn: str) -> str:
-    filename = f"{fqn.replace('/', '__')}.json"
+    filename = _provider_filename(fqn)
     if catalog_source.startswith(("http://", "https://")):
         base = catalog_source.rsplit("/", 1)[0].rstrip("/") + "/"
         return urljoin(base, f"pay/{filename}")
-    return str(Path(catalog_source).parent / "pay" / filename)
+    path = Path(catalog_source).parent / "pay" / filename
+    if path.exists():
+        return str(path)
+    remote_base = _remote_base_from_source(catalog_source)
+    if remote_base:
+        return urljoin(remote_base, f"pay/{filename}")
+    return str(path)
+
+
+def _cache_provider_assets(source: str, catalog_payload: dict[str, Any]) -> tuple[int, int]:
+    base = _remote_base_from_source(source, catalog_payload)
+    if not base:
+        return (0, 0)
+
+    provider_count = 0
+    pay_count = 0
+    for provider in catalog_payload.get("providers", []):
+        if not isinstance(provider, dict):
+            continue
+        fqn = provider.get("fqn")
+        if not isinstance(fqn, str) or not fqn:
+            continue
+        filename = _provider_filename(fqn)
+        try:
+            detail = _read_json(urljoin(base, f"providers/{filename}"))
+            _write_json(cache_dir() / "providers" / filename, detail)
+            provider_count += 1
+        except (ValueError, httpx.HTTPError):
+            pass
+        try:
+            pay_json = _read_json(urljoin(base, f"pay/{filename}"))
+            _write_json(cache_dir() / "pay" / filename, pay_json)
+            pay_count += 1
+        except (ValueError, httpx.HTTPError):
+            pass
+    return (provider_count, pay_count)
 
 
 def _zh_copy(title: str, subtitle: str, description: str, use_case: str) -> dict[str, str]:
@@ -192,15 +258,20 @@ def update(catalog_url: str | None, output_json: bool) -> None:
     source = catalog_url or default_catalog()
     payload = _read_json(source)
     _write_json(cached_catalog_path(), payload)
+    detail_count, pay_count = _cache_provider_assets(source, payload)
     result = {
         "source": source,
         "path": str(cached_catalog_path()),
         "providerCount": payload.get("provider_count", len(payload.get("providers", []))),
+        "detailCount": detail_count,
+        "payCount": pay_count,
     }
     if output_json:
         click.echo(json.dumps(result, indent=2, sort_keys=True))
         return
     click.echo(f"cached {result['providerCount']} provider(s) from {source}")
+    if detail_count or pay_count:
+        click.echo(f"cached {detail_count} provider detail file(s), {pay_count} pay file(s)")
     click.echo(str(cached_catalog_path()))
 
 

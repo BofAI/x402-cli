@@ -37,7 +37,7 @@ Each walkthrough ends with a real on-chain transaction you can inspect on Tronsc
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b3
+pip install bankofai-x402-cli==0.6.1b4
 x402-cli --version
 agent-wallet --help | head -3      # confirm agent-wallet ships with the CLI
 ```
@@ -341,7 +341,7 @@ Verify on BscScan: `https://testnet.bscscan.com/tx/<tx-hash>`.
 
 ```
 # install
-pip install bankofai-x402-cli==0.6.1b3
+pip install bankofai-x402-cli==0.6.1b4
 
 # wallet (one-time, plaintext for testing)
 export AGENT_WALLET_DIR=/tmp/x402-test-wallet
