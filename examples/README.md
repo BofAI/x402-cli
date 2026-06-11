@@ -7,7 +7,7 @@
 常用流程：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b1
+pip install bankofai-x402-cli==0.6.1b2
 x402-cli catalog update
 x402-cli catalog search "weather"
 x402-cli catalog show acme-weather
@@ -34,14 +34,14 @@ gateway operations all live under `x402-cli`.
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b1
+pip install bankofai-x402-cli==0.6.1b2
 x402-cli --version
 ```
 
 Expected:
 
 ```text
-x402-cli, version 0.6.1b1
+x402-cli, version 0.6.1b2
 ```
 
 ## 2. Find a Paid API

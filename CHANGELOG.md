@@ -4,6 +4,17 @@ All notable changes to `bankofai-x402-cli` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1b2] — 2026-06-11
+
+### Added
+
+- **`x402-mcp` stdio server** — exposes the existing catalog and payment flows as MCP tools for agents. Tools include `catalog_search`, `catalog_show`, `catalog_endpoints`, `catalog_pay_json`, `x402_pay`, and `wallet_status`.
+- **MCP setup guide** — `mcp/README.md` documents Claude Code and Codex CLI configuration using the same `bankofai-x402-cli` package.
+
+### Notes
+
+- The MCP server reuses `x402-cli` and Agent Wallet behavior; there is no separate payment implementation or wallet path.
+
 ## [0.1.0] — 2026-05-08
 
 First stable release. Consolidates everything from `0.1.0-beta.5` through `0.1.0-beta.17`. The package is `pip install bankofai-x402-cli` (no `--pre` needed) and the binary is `x402-cli`.
