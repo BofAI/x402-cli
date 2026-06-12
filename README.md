@@ -11,7 +11,7 @@
 安装：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b6
 x402-cli --version
 ```
 
@@ -48,7 +48,7 @@ Community copy-paste examples live in [`examples/README.md`](examples/README.md)
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b6
 x402-cli --version
 ```
 

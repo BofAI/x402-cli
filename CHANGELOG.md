@@ -4,6 +4,18 @@ All notable changes to `bankofai-x402-cli` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1b6] — 2026-06-12
+
+### Changed
+
+- Classify token `TRANSFER_FROM_FAILED` settlement reverts as `TOKEN_TRANSFER_FAILED` with a payer balance/token mismatch hint.
+
+## [0.6.1b5] — 2026-06-12
+
+### Changed
+
+- Re-publish the CLI beta after PyPI accepted `0.6.1b2` through `0.6.1b4` files without exposing them in the simple package index.
+
 ## [0.6.1b4] — 2026-06-11
 
 ### Changed

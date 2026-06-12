@@ -37,7 +37,7 @@ Each walkthrough ends with a real on-chain transaction you can inspect on Tronsc
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b6
 x402-cli --version
 agent-wallet --help | head -3      # confirm agent-wallet ships with the CLI
 ```
@@ -328,6 +328,7 @@ Verify on BscScan: `https://testnet.bscscan.com/tx/<tx-hash>`.
 | `resolve_wallet could not find a wallet source` | No wallet config and no env var | Run step 2; fallback option is 2.D |
 | `Insufficient GasFree balance` (walkthrough A) | gasFreeAddress balance < amount + transferFee + (activateFee if first time) | Top up gasFreeAddress (4.2) and re-check (4.1) |
 | `GasFree account not activated` | First-time use of a gasFreeAddress | Make sure balance covers `activateFee`; first settlement auto-activates |
+| `TRANSFER_FROM_FAILED` / `TOKEN_TRANSFER_FAILED` | Settlement reached token `transferFrom()`, but the payer cannot transfer the requested token amount | Check payer token balance, provider pay JSON `asset/network/scheme`, token contract, and try a smaller `--max-amount` |
 | `too many pending transfers` | GasFree relayer rate limit | Wait 30–60s, retry |
 | `429 Too Many Requests` from facilitator | Settlement endpoint rate limit | Wait 30–60s, retry |
 | Settlement reverts with `permit`-related error (walkthrough B/C) | Token contract's `permit` domain doesn't match SDK's | Use `exact_gasfree` on TRON, or `exact` on EVM if the token supports ERC-3009 |
@@ -341,7 +342,7 @@ Verify on BscScan: `https://testnet.bscscan.com/tx/<tx-hash>`.
 
 ```
 # install
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b6
 
 # wallet (one-time, plaintext for testing)
 export AGENT_WALLET_DIR=/tmp/x402-test-wallet
