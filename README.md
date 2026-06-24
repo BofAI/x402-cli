@@ -11,7 +11,7 @@
 安装：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b6
+pip install bankofai-x402-cli==0.6.1b7
 x402-cli --version
 ```
 
@@ -19,20 +19,26 @@ x402-cli --version
 
 ```bash
 x402-cli catalog update
-x402-cli catalog search "weather"
-x402-cli catalog show acme-weather
-x402-cli catalog endpoints acme-weather
-x402-cli pay 'https://gateway.example.com/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli catalog search "token launch"
+x402-cli catalog show sunpump-token-launch
+x402-cli catalog endpoints sunpump-token-launch
+x402-cli catalog pay-json sunpump-token-launch
+x402-cli pay 'https://x402-gateway.bankofai.io/providers/sunpump-token-launch-tron/pump-api/ai/agentTokenLaunch' \
+  --method POST \
+  --network tron:mainnet \
+  --scheme exact_permit \
+  --token USDT \
+  --json '{"name":"TestAutoLaunch","symbol":"TAL","description":"sun flower 666","imageBase64":"","twitterUrl":"","telegramUrl":"","websiteUrl":"","tweetUsername":""}'
 ```
 
 服务方提交流程：
 
 ```bash
-x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway check providers/sunpump-token-launch-tron/provider.yml
 x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
-x402-cli catalog export-gateway https://gateway.example.com \
-  --provider acme-weather \
-  --output-dir providers/acme-weather
+x402-cli catalog export-gateway https://x402-gateway.bankofai.io \
+  --provider sunpump-token-launch-tron \
+  --output-dir providers/sunpump-token-launch-tron
 ```
 
 只把导出的 `catalog.json` 和 `pay.md` 提交到 `x402-catelog`。不要提交 `provider.yml`、`.env`、API key、bearer token 或钱包私钥。
@@ -48,7 +54,7 @@ Community copy-paste examples live in [`examples/README.md`](examples/README.md)
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b6
+pip install bankofai-x402-cli==0.6.1b7
 x402-cli --version
 ```
 
@@ -80,22 +86,22 @@ agent-wallet start raw_secret \
 Catalog search can read the hosted catalog, a local `dist/catalog.json`, or a gateway-exported catalog URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
 
 ```bash
-export X402_CATALOG=https://tm-x402-catelog.bankofai.io/api/catalog.json
+export X402_CATALOG=https://x402-catelog.bankofai.io/api/catalog.json
 x402-cli catalog update
-x402-cli catalog search "weather"
-x402-cli catalog show acme-weather
-x402-cli catalog endpoints acme-weather
-x402-cli catalog pay-json acme-weather
+x402-cli catalog search "token launch"
+x402-cli catalog show sunpump-token-launch
+x402-cli catalog endpoints sunpump-token-launch
+x402-cli catalog pay-json sunpump-token-launch
 ```
 
 For local gateway development:
 
 ```bash
-x402-cli gateway scaffold acme-weather \
-  --output-dir providers/acme-weather \
-  --forward-url https://api.example.com
+x402-cli gateway scaffold sunpump-token-launch-tron \
+  --output-dir providers/sunpump-token-launch-tron \
+  --forward-url https://tn-api.sunpump.meme
 
-x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway check providers/sunpump-token-launch-tron/provider.yml
 x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
 ```
 
@@ -114,19 +120,19 @@ Natural-language intent
 Provider onboarding flow:
 
 ```bash
-x402-cli gateway check providers/acme-weather/provider.yml
+x402-cli gateway check providers/sunpump-token-launch-tron/provider.yml
 x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
 
-x402-cli catalog export-gateway https://gateway.example.com \
-  --provider acme-weather \
-  --output-dir providers/acme-weather
+x402-cli catalog export-gateway https://x402-gateway.bankofai.io \
+  --provider sunpump-token-launch-tron \
+  --output-dir providers/sunpump-token-launch-tron
 ```
 
 The command writes public PR files only:
 
 ```text
-providers/acme-weather/catalog.json
-providers/acme-weather/pay.md
+providers/sunpump-token-launch/catalog.json
+providers/sunpump-token-launch/pay.md
 ```
 
 Do not submit `provider.yml`, `.env`, upstream API keys, bearer tokens, or passwords.
@@ -134,11 +140,11 @@ Do not submit `provider.yml`, `.env`, upstream API keys, bearer tokens, or passw
 Provider catalog build commands are also under `x402-cli`:
 
 ```bash
-x402-cli gateway catalog generate providers/acme-weather/provider.yml
-x402-cli gateway catalog pay-assets providers/acme-weather/provider.yml
+x402-cli gateway catalog generate providers/sunpump-token-launch-tron/provider.yml
+x402-cli gateway catalog pay-assets providers/sunpump-token-launch-tron/provider.yml
 x402-cli gateway catalog check providers
 x402-cli gateway catalog build providers --dist-dir dist
-x402-cli gateway catalog search providers weather
+x402-cli gateway catalog search providers sunpump
 ```
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet

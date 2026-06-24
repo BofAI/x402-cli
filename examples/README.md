@@ -7,12 +7,17 @@
 常用流程：
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b7
 x402-cli catalog update
-x402-cli catalog search "weather"
-x402-cli catalog show acme-weather
-x402-cli catalog endpoints acme-weather
-x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli catalog search "defillama"
+x402-cli catalog show defillama
+x402-cli catalog endpoints defillama
+x402-cli pay 'https://x402-gateway.bankofai.io/providers/defillama-tvl-tron/protocols' \
+  --method GET \
+  --network tron:mainnet \
+  --scheme exact_permit \
+  --token USDT \
+  --max-amount 0.001
 ```
 
 服务方导出公开 PR 文件：
@@ -34,14 +39,14 @@ gateway operations all live under `x402-cli`.
 ## 1. Install
 
 ```bash
-pip install bankofai-x402-cli==0.6.1b4
+pip install bankofai-x402-cli==0.6.1b7
 x402-cli --version
 ```
 
 Expected:
 
 ```text
-x402-cli, version 0.6.1b4
+x402-cli, version 0.6.1b7
 ```
 
 ## 2. Find a Paid API
@@ -50,16 +55,16 @@ Search the public catalog:
 
 ```bash
 x402-cli catalog update
-x402-cli catalog search "weather"
-x402-cli catalog show acme-weather
-x402-cli catalog endpoints acme-weather
-x402-cli catalog pay-json acme-weather
+x402-cli catalog search "defillama"
+x402-cli catalog show defillama
+x402-cli catalog endpoints defillama
+x402-cli catalog pay-json defillama
 ```
 
 Use a local catalog during development:
 
 ```bash
-x402-cli catalog search "weather" \
+x402-cli catalog search "defillama" \
   --catalog ../x402-catelog/dist/catalog.json \
   --json
 ```
@@ -69,14 +74,19 @@ x402-cli catalog search "weather" \
 After choosing an endpoint from the catalog:
 
 ```bash
-x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli pay 'https://x402-gateway.bankofai.io/providers/defillama-tvl-tron/protocols' \
+  --method GET \
+  --network tron:mainnet \
+  --scheme exact_permit \
+  --token USDT \
+  --max-amount 0.001
 ```
 
 For a dry run that reads the payment requirement without signing:
 
 ```bash
 x402-cli pay \
-  'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai' \
+  'https://x402-gateway.bankofai.io/providers/defillama-tvl-tron/protocols' \
   --dry-run \
   --json
 ```
@@ -125,9 +135,14 @@ Submit only these public files to `BofAI/x402-catelog`.
 Agents should use the catalog first, then call the selected endpoint:
 
 ```bash
-x402-cli catalog search "current weather for a city" --json
-x402-cli catalog pay-json acme-weather
-x402-cli pay 'https://tm-x402-gateway.bankofai.io/providers/acme-weather/v1/current?city=Shanghai'
+x402-cli catalog search "defillama tvl" --json
+x402-cli catalog pay-json defillama
+x402-cli pay 'https://x402-gateway.bankofai.io/providers/defillama-tvl-tron/protocols' \
+  --method GET \
+  --network tron:mainnet \
+  --scheme exact_permit \
+  --token USDT \
+  --max-amount 0.001
 ```
 
 The catalog response gives the provider FQN, endpoint URL, price range, chains,

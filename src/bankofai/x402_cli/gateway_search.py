@@ -57,7 +57,7 @@ class GatewaySearchHit:
 def default_catalog() -> str:
     return os.environ.get(
         "X402_CATALOG",
-        os.environ.get("X402_GATEWAY_CATALOG", "https://tm-x402-catelog.bankofai.io/api/catalog.json"),
+        os.environ.get("X402_GATEWAY_CATALOG", "https://x402-catelog.bankofai.io/api/catalog.json"),
     )
 
 

@@ -4,6 +4,14 @@ All notable changes to `bankofai-x402-cli` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1b7] — 2026-06-24
+
+### Changed
+
+- Point the default hosted catalog URL at `https://x402-catelog.bankofai.io/api/catalog.json`.
+- Refresh CLI README and community examples to use production `x402-gateway.bankofai.io` mainnet routes.
+- Align catalog command fixtures with the merged production provider catalog: SunPump TRON/BSC mainnet `exact_permit` routes.
+
 ## [0.6.1b6] — 2026-06-12
 
 ### Changed

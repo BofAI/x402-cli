@@ -32,13 +32,13 @@ async def test_mcp_catalog_tools_use_public_catalog(tmp_path: Path) -> None:
             "method": "tools/call",
             "params": {
                 "name": "catalog_search",
-                "arguments": {"query": "weather", "catalog": str(catalog)},
+                "arguments": {"query": "token launch", "catalog": str(catalog)},
             },
         }
     )
     assert search is not None
     search_payload = json.loads(search["result"]["content"][0]["text"])
-    assert search_payload["results"][0]["fqn"] == "acme-weather"
+    assert search_payload["results"][0]["fqn"] == "sunpump-token-launch"
 
     endpoints = await mcp_server.handle_message(
         {
@@ -47,13 +47,13 @@ async def test_mcp_catalog_tools_use_public_catalog(tmp_path: Path) -> None:
             "method": "tools/call",
             "params": {
                 "name": "catalog_endpoints",
-                "arguments": {"fqn": "acme-weather", "catalog": str(catalog)},
+                "arguments": {"fqn": "sunpump-token-launch", "catalog": str(catalog)},
             },
         }
     )
     assert endpoints is not None
     endpoints_payload = json.loads(endpoints["result"]["content"][0]["text"])
-    assert endpoints_payload["endpoints"][0]["path"] == "/v1/current"
+    assert endpoints_payload["endpoints"][0]["path"] == "/pump-api/ai/agentTokenLaunch"
 
 
 @pytest.mark.asyncio

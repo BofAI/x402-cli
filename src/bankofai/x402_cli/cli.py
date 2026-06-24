@@ -93,8 +93,8 @@ def _run_gateway_command(*args: str) -> None:
     type=str,
     default=None,
     help=(
-        "Catalog source: local dist/skills.json or HTTPS URL. "
-        "Defaults to $X402_GATEWAY_CATALOG or dist/skills.json."
+        "Catalog source: local dist/catalog.json or HTTPS URL. "
+        "Defaults to $X402_CATALOG, $X402_GATEWAY_CATALOG, or the hosted catalog."
     ),
 )
 @click.option("--limit", "-n", type=int, default=10, help="Maximum result count.")
@@ -114,7 +114,7 @@ def gateway_search(
     """Search an x402-gateway catalog for capabilities.
 
     Example:
-      x402-cli gateway search "weather"
+      x402-cli gateway search "token launch"
     """
     catalog_source = catalog or default_catalog()
     try:

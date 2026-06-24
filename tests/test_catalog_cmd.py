@@ -13,6 +13,42 @@ def _write_public_catalog(tmp_path: Path) -> Path:
     dist = tmp_path / "dist"
     (dist / "providers").mkdir(parents=True)
     (dist / "pay").mkdir()
+    fqn = "sunpump-token-launch"
+    service_url = "https://sunpump.meme"
+    gateway_url = (
+        "https://x402-gateway.bankofai.io/providers/"
+        "sunpump-token-launch-tron/pump-api/ai/agentTokenLaunch"
+    )
+    endpoint = {
+        "method": "POST",
+        "path": "/pump-api/ai/agentTokenLaunch",
+        "url": gateway_url,
+        "description": (
+            "Submit token metadata to SunPump after x402 payment settlement. "
+            "`imageBase64` can carry a base64-encoded token image; when it is empty "
+            "or omitted, SunPump generates an image automatically."
+        ),
+        "metered": True,
+        "min_price_usd": 0.001,
+        "max_price_usd": 0.001,
+        "x402_routes": [
+            {
+                "network": "tron:mainnet",
+                "provider": "sunpump-token-launch-tron",
+                "scheme": "exact_permit",
+                "url": gateway_url,
+            },
+            {
+                "network": "eip155:56",
+                "provider": "sunpump-token-launch-bsc",
+                "scheme": "exact_permit",
+                "url": (
+                    "https://x402-gateway.bankofai.io/providers/"
+                    "sunpump-token-launch-bsc/pump-api/ai/agentTokenLaunch"
+                ),
+            },
+        ],
+    }
     (dist / "catalog.json").write_text(
         json.dumps(
             {
@@ -21,58 +57,43 @@ def _write_public_catalog(tmp_path: Path) -> Path:
                 "provider_count": 1,
                 "providers": [
                     {
-                        "fqn": "acme-weather",
-                        "title": "Acme Weather API",
-                        "subtitle": "City-level weather",
-                        "description": "Current weather data",
-                        "use_case": "Look up weather by city",
-                        "category": "data",
-                        "service_url": "https://gw.example.com/providers/acme-weather",
-                        "featured_tags": ["weather"],
+                        "fqn": fqn,
+                        "title": "SunPump Agent Token Launch API",
+                        "subtitle": "Paid agent token creation through SunPump",
+                        "description": "Launch a SunPump token from structured metadata.",
+                        "use_case": "Create a token after a successful x402 payment.",
+                        "category": "finance",
+                        "service_url": service_url,
+                        "featured_tags": ["sunpump", "token-launch", "tron", "bsc"],
                     }
                 ],
             }
         )
     )
-    (dist / "providers" / "acme-weather.json").write_text(
+    (dist / "providers" / f"{fqn}.json").write_text(
         json.dumps(
             {
-                "fqn": "acme-weather",
-                "title": "Acme Weather API",
-                "subtitle": "City-level weather",
-                "description": "Current weather data",
-                "use_case": "Look up weather by city",
-                "category": "data",
-                "service_url": "https://gw.example.com/providers/acme-weather",
-                "featured_tags": ["weather"],
-                "chains": ["tron:mainnet"],
-                "endpoints": [
-                    {
-                        "method": "GET",
-                        "path": "/v1/current",
-                        "url": "https://gw.example.com/providers/acme-weather/v1/current",
-                        "description": "Current weather for a city",
-                        "metered": True,
-                        "min_price_usd": 0.002,
-                        "max_price_usd": 0.002,
-                    }
-                ],
+                "fqn": fqn,
+                "title": "SunPump Agent Token Launch API",
+                "subtitle": "Paid agent token creation through SunPump",
+                "description": "Launch a SunPump token from structured metadata.",
+                "use_case": "Create a token after a successful x402 payment.",
+                "category": "finance",
+                "service_url": service_url,
+                "featured_tags": ["sunpump", "token-launch", "tron", "bsc"],
+                "chains": ["tron:mainnet", "eip155:56"],
+                "chain_kinds": ["tron", "bnb"],
+                "endpoints": [endpoint],
             }
         )
     )
-    (dist / "pay" / "acme-weather.json").write_text(
+    (dist / "pay" / f"{fqn}.json").write_text(
         json.dumps(
             {
                 "version": 1,
-                "fqn": "acme-weather",
-                "service_url": "https://gw.example.com/providers/acme-weather",
-                "endpoints": [
-                    {
-                        "method": "GET",
-                        "path": "/v1/current",
-                        "url": "https://gw.example.com/providers/acme-weather/v1/current",
-                    }
-                ],
+                "fqn": fqn,
+                "service_url": service_url,
+                "endpoints": [endpoint],
             }
         )
     )
@@ -85,31 +106,31 @@ def test_catalog_search_show_endpoints_and_pay_json(tmp_path: Path) -> None:
 
     search = runner.invoke(
         cli,
-        ["catalog", "search", "weather", "--catalog", str(catalog), "--json"],
+        ["catalog", "search", "token launch", "--catalog", str(catalog), "--json"],
     )
     assert search.exit_code == 0
-    assert json.loads(search.output)["results"][0]["fqn"] == "acme-weather"
+    assert json.loads(search.output)["results"][0]["fqn"] == "sunpump-token-launch"
 
     show = runner.invoke(
         cli,
-        ["catalog", "show", "acme-weather", "--catalog", str(catalog), "--json"],
+        ["catalog", "show", "sunpump-token-launch", "--catalog", str(catalog), "--json"],
     )
     assert show.exit_code == 0
-    assert json.loads(show.output)["service_url"].endswith("/providers/acme-weather")
+    assert json.loads(show.output)["service_url"] == "https://sunpump.meme"
 
     endpoints = runner.invoke(
         cli,
-        ["catalog", "endpoints", "acme-weather", "--catalog", str(catalog), "--json"],
+        ["catalog", "endpoints", "sunpump-token-launch", "--catalog", str(catalog), "--json"],
     )
     assert endpoints.exit_code == 0
-    assert json.loads(endpoints.output)["endpoints"][0]["path"] == "/v1/current"
+    assert json.loads(endpoints.output)["endpoints"][0]["path"] == "/pump-api/ai/agentTokenLaunch"
 
     pay_json = runner.invoke(
         cli,
-        ["catalog", "pay-json", "acme-weather", "--catalog", str(catalog)],
+        ["catalog", "pay-json", "sunpump-token-launch", "--catalog", str(catalog)],
     )
     assert pay_json.exit_code == 0
-    assert json.loads(pay_json.output)["fqn"] == "acme-weather"
+    assert json.loads(pay_json.output)["fqn"] == "sunpump-token-launch"
 
 
 def test_catalog_update_caches_catalog(
@@ -138,15 +159,15 @@ def test_catalog_update_caches_remote_detail_and_pay_files(tmp_path: Path, monke
     monkeypatch.setattr(catalog_cmd, "cache_dir", lambda: cache_root)
 
     catalog_payload = json.loads(_write_public_catalog(tmp_path).read_text())
-    detail_payload = json.loads((tmp_path / "dist" / "providers" / "acme-weather.json").read_text())
-    pay_payload = json.loads((tmp_path / "dist" / "pay" / "acme-weather.json").read_text())
+    detail_payload = json.loads((tmp_path / "dist" / "providers" / "sunpump-token-launch.json").read_text())
+    pay_payload = json.loads((tmp_path / "dist" / "pay" / "sunpump-token-launch.json").read_text())
 
     def fake_read_json(source: str):
         if source == "https://catalog.example.com/api/catalog.json":
             return catalog_payload
-        if source == "https://catalog.example.com/api/providers/acme-weather.json":
+        if source == "https://catalog.example.com/api/providers/sunpump-token-launch.json":
             return detail_payload
-        if source == "https://catalog.example.com/api/pay/acme-weather.json":
+        if source == "https://catalog.example.com/api/pay/sunpump-token-launch.json":
             return pay_payload
         raise AssertionError(source)
 
@@ -167,43 +188,46 @@ def test_catalog_update_caches_remote_detail_and_pay_files(tmp_path: Path, monke
     payload = json.loads(result.output)
     assert payload["detailCount"] == 1
     assert payload["payCount"] == 1
-    assert (cache_root / "providers" / "acme-weather.json").exists()
-    assert (cache_root / "pay" / "acme-weather.json").exists()
+    assert (cache_root / "providers" / "sunpump-token-launch.json").exists()
+    assert (cache_root / "pay" / "sunpump-token-launch.json").exists()
 
 
 def test_catalog_detail_falls_back_to_base_url_when_local_detail_missing(tmp_path: Path) -> None:
     catalog = _write_public_catalog(tmp_path)
-    (tmp_path / "dist" / "providers" / "acme-weather.json").unlink()
-    (tmp_path / "dist" / "pay" / "acme-weather.json").unlink()
+    (tmp_path / "dist" / "providers" / "sunpump-token-launch.json").unlink()
+    (tmp_path / "dist" / "pay" / "sunpump-token-launch.json").unlink()
     assert (
-        catalog_cmd._detail_source(str(catalog), "acme-weather")
-        == "https://catalog.example.com/api/providers/acme-weather.json"
+        catalog_cmd._detail_source(str(catalog), "sunpump-token-launch")
+        == "https://catalog.example.com/api/providers/sunpump-token-launch.json"
     )
     assert (
-        catalog_cmd._pay_source(str(catalog), "acme-weather")
-        == "https://catalog.example.com/api/pay/acme-weather.json"
+        catalog_cmd._pay_source(str(catalog), "sunpump-token-launch")
+        == "https://catalog.example.com/api/pay/sunpump-token-launch.json"
     )
 
 
 def test_catalog_export_gateway_writes_pr_files(tmp_path: Path, monkeypatch) -> None:
     detail = {
-        "fqn": "acme-weather",
-        "title": "Acme Weather API",
-        "subtitle": "City-level weather",
-        "description": "Current weather data",
-        "use_case": "Look up weather by city",
-        "category": "data",
-        "service_url": "https://gw.example.com/providers/acme-weather",
+        "fqn": "sunpump-token-launch-tron",
+        "title": "SunPump Agent Token Launch API",
+        "subtitle": "Paid agent token creation through SunPump",
+        "description": "Launch a SunPump token from structured metadata.",
+        "use_case": "Create a token after a successful x402 payment.",
+        "category": "finance",
+        "service_url": "https://gw.example.com/providers/sunpump-token-launch-tron",
         "chains": ["tron:mainnet"],
         "endpoints": [
             {
-                "method": "GET",
-                "path": "/v1/current",
-                "url": "https://gw.example.com/providers/acme-weather/v1/current",
-                "description": "Current weather for a city",
+                "method": "POST",
+                "path": "/pump-api/ai/agentTokenLaunch",
+                "url": (
+                    "https://gw.example.com/providers/sunpump-token-launch-tron/"
+                    "pump-api/ai/agentTokenLaunch"
+                ),
+                "description": "Launch a SunPump token from metadata.",
                 "metered": True,
-                "min_price_usd": 0.002,
-                "max_price_usd": 0.002,
+                "min_price_usd": 0.001,
+                "max_price_usd": 0.001,
             }
         ],
     }
@@ -217,7 +241,7 @@ def test_catalog_export_gateway_writes_pr_files(tmp_path: Path, monkeypatch) -> 
             "export-gateway",
             "https://gw.example.com",
             "--provider",
-            "acme-weather",
+            "sunpump-token-launch-tron",
             "--output-dir",
             str(out),
             "--json",
@@ -228,8 +252,11 @@ def test_catalog_export_gateway_writes_pr_files(tmp_path: Path, monkeypatch) -> 
     assert (out / "catalog.json").exists()
     assert (out / "pay.md").exists()
     payload = json.loads((out / "catalog.json").read_text())
-    assert payload["fqn"] == "acme-weather"
-    assert payload["endpoints"][0]["path"] == "/v1/current"
+    assert payload["fqn"] == "sunpump-token-launch-tron"
+    assert payload["endpoints"][0]["path"] == "/pump-api/ai/agentTokenLaunch"
     pay_md = (out / "pay.md").read_text()
-    assert "x402-cli pay 'https://gw.example.com/providers/acme-weather/v1/current'" in pay_md
+    assert (
+        "x402-cli pay 'https://gw.example.com/providers/sunpump-token-launch-tron/"
+        "pump-api/ai/agentTokenLaunch'" in pay_md
+    )
     assert "provider.yml" in pay_md
