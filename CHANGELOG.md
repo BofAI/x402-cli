@@ -4,7 +4,7 @@ All notable changes to `bankofai-x402-cli` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.1b7] — 2026-06-24
+## [0.6.1] — 2026-06-24
 
 ### Changed
 
@@ -28,8 +28,8 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Point the default hosted catalog URL at `https://tm-x402-catelog.bankofai.io/api/catalog.json`.
-- Refresh Bank of AI gateway examples to `https://tm-x402-gateway.bankofai.io`.
+- Point the default hosted catalog URL at the Bank of AI hosted catalog.
+- Refresh Bank of AI gateway examples to the hosted gateway domain.
 - Cache provider detail and pay JSON files during `x402-cli catalog update`, with remote fallback from catalog `base_url` when local detail files are missing.
 
 ## [0.6.1b2] — 2026-06-11
