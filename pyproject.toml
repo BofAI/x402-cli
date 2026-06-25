@@ -48,7 +48,6 @@ dev = [
 
 [project.scripts]
 x402-cli = "bankofai.x402_cli.cli:main"
-x402-mcp = "bankofai.x402_cli.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/BofAI/x402-cli#readme"
