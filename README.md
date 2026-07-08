@@ -2,26 +2,29 @@
 
 The BankofAI command-line client for the x402 protocol — pay any x402-protected URL, run your own paywall, or test the full handshake locally. **No code required.**
 
+`x402-cli` is the single user-facing entrypoint. It includes payment commands, public catalog discovery, and provider gateway operations under one command tree. The gateway runtime is packaged underneath the CLI, so most users only install and remember `x402-cli`.
+
+Community copy-paste examples live in [`examples/README.md`](examples/README.md).
+
 ## 1. Install
 
 ```bash
-pip install --pre bankofai-x402-cli
+pip install bankofai-x402-cli==0.6.1
 x402-cli --version
 ```
 
 ## 2. Set up a wallet (one-time)
 
-`x402-cli` delegates all signing to [`bankofai-agent-wallet`](https://github.com/BofAI/agent-wallet). Fastest path — import a 32-byte hex private key:
+`x402-cli` delegates all signing to [`bankofai-agent-wallet`](https://github.com/BofAI/agent-wallet). Configure any supported wallet backend before paying.
 
 ```bash
-agent-wallet start raw_secret \
-  --wallet-id payer \
-  --private-key 0x<your-32-byte-hex-private-key>
+agent-wallet list
+agent-wallet resolve-address payer
 ```
 
 > A single key derives both an EVM address and a TRON address. **You don't need a separate wallet per chain.**
 >
-> Other setup paths (encrypted local store, mnemonic, Privy-managed): see [agent-wallet — Getting Started](https://github.com/BofAI/agent-wallet/blob/main/doc/getting-started.md).
+> Setup paths (encrypted local store, mnemonic, raw secret, Privy-managed): see [agent-wallet — Getting Started](https://github.com/BofAI/agent-wallet/blob/main/doc/getting-started.md). Keep wallet secrets outside this repository.
 
 ## 3. What each command does
 
@@ -30,6 +33,73 @@ agent-wallet start raw_secret \
 | **`x402-cli pay <url>`** | The payer | Hits a URL, and if the server returns `402 Payment Required`, the cli signs + submits the payment + retrieves the response. |
 | **`x402-cli serve`** | The recipient | Starts a local `402` paywall endpoint that only returns content after a valid payment is settled. |
 | **`x402-cli roundtrip`** | Self-test / one-shot transfer | Spins up a `serve` in the background, runs `pay` against it, and tears it down. **The fastest way to make a payment from the command line** — and the easiest way to verify your install end-to-end. |
+| **`x402-cli catalog search <query>`** | API consumer / agent runtime | Searches the public x402 catalog to find a matching paid capability before calling it. |
+| **`x402-cli gateway start ...`** | API provider | Starts a self-hosted provider gateway from local `provider.yml` files. |
+| **`x402-cli catalog export-gateway <url> --provider <fqn>`** | API provider | Exports public `catalog.json` and `pay.md` files from a self-hosted gateway for PR submission. |
+
+Catalog search can read the hosted catalog, a local `dist/catalog.json`, or a gateway-exported catalog URL. This is the discovery step for agents and local tooling: the user asks for a capability, the catalog search finds matching paid APIs, then the normal x402 payment client can call the selected gateway URL.
+
+```bash
+export X402_CATALOG=https://x402-catelog.bankofai.io/api/catalog.json
+x402-cli catalog update
+x402-cli catalog search "token launch"
+x402-cli catalog show sunpump-token-launch
+x402-cli catalog endpoints sunpump-token-launch
+x402-cli catalog pay-json sunpump-token-launch
+```
+
+For local gateway development:
+
+```bash
+x402-cli gateway scaffold sunpump-token-launch-tron \
+  --output-dir providers/sunpump-token-launch-tron \
+  --forward-url https://api.example.com
+
+x402-cli gateway check providers/sunpump-token-launch-tron/provider.yml
+x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
+```
+
+Expected flow with the gateway:
+
+```text
+Natural-language intent
+  -> x402-cli catalog search
+  -> x402-cli catalog show/endpoints/pay-json
+  -> provider endpoint from the catalog
+  -> x402-cli pay <gateway endpoint>
+  -> x402 SDK handles the 402 challenge and payment retry
+  -> upstream API result
+```
+
+Provider onboarding flow:
+
+```bash
+x402-cli gateway check providers/sunpump-token-launch-tron/provider.yml
+x402-cli gateway start --providers-dir providers --host 0.0.0.0 --port 4020
+
+x402-cli catalog export-gateway https://x402-gateway.bankofai.io \
+  --provider sunpump-token-launch-tron \
+  --output-dir providers/sunpump-token-launch-tron
+```
+
+The command writes public PR files only:
+
+```text
+providers/sunpump-token-launch/catalog.json
+providers/sunpump-token-launch/pay.md
+```
+
+Do not submit `provider.yml`, `.env`, upstream API keys, bearer tokens, or passwords.
+
+Provider catalog build commands are also under `x402-cli`:
+
+```bash
+x402-cli gateway catalog generate providers/sunpump-token-launch-tron/provider.yml
+x402-cli gateway catalog pay-assets providers/sunpump-token-launch-tron/provider.yml
+x402-cli gateway catalog check providers
+x402-cli gateway catalog build providers --dist-dir dist
+x402-cli gateway catalog search providers sunpump
+```
 
 ## 4. Copy-paste: a USDT transfer on TRON mainnet
 
@@ -63,7 +133,7 @@ Verify on chain at `https://tronscan.org/#/transaction/<tx-hash>`.
 >
 > *First-time only*: if this is your wallet's first payment for this token, the cli will ask you to sign and broadcast a one-time `approve` transaction (~6 TRX on mainnet) so the PaymentPermit contract can move tokens on your behalf later. After that, every payment is gas-free from your side.
 >
-> **Don't have any TRX at all?** Add `--scheme exact_gasfree` to skip even that one-time approve — it routes everything through a GasFree relayer that fronts gas in exchange for a per-settlement fee deducted from a derived custodial address. Setup: [docs/manual-test-guide.md → Walkthrough A](docs/manual-test-guide.md#4-walkthrough-a--tron-nile--exact_gasfree).
+> **Don't have any TRX at all?** Add `--scheme exact_gasfree` to skip even that one-time approve — it routes everything through a GasFree relayer that fronts gas in exchange for a per-settlement fee deducted from a derived custodial address.
 
 ### Templates for other networks
 
@@ -71,8 +141,6 @@ Verify on chain at `https://tronscan.org/#/transaction/<tx-hash>`.
 |---|---|---|
 | TRON mainnet (default permit) | `tron:mainnet` | Facilitator pays per-payment gas. One-time ~6 TRX approve when you first use a token from a fresh wallet. Add `--scheme exact_gasfree` to skip that too. |
 | BSC mainnet (USDT permit) | `eip155:56` | Same model — facilitator pays per-payment gas; one-time approve fee in BNB on first use. |
-| TRON Nile (testnet) | `tron:nile` | [Faucet](https://nileex.io/join/getJoinPage) |
-| BSC Testnet | `eip155:97` | [Faucet](https://testnet.bnbchain.org/faucet-smart) |
 
 To force a specific settlement scheme (instead of the auto-pick), add `--scheme exact_gasfree | exact_permit | exact`.
 

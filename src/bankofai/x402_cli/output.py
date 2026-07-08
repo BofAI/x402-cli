@@ -75,7 +75,11 @@ def emit_human(
 
         if result and isinstance(result, dict):
             for key, value in result.items():
-                print(f"  {key}: {value}")
+                if key == "response" and isinstance(value, (dict, list)):
+                    print("  response:")
+                    print(json.dumps(value, ensure_ascii=False, indent=2))
+                else:
+                    print(f"  {key}: {value}")
 
 
 def emit(

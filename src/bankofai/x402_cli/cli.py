@@ -2,13 +2,17 @@
 """x402-cli — serve or pay x402 endpoints."""
 
 import asyncio
+import json
 import logging
 import subprocess
+import sys
 import time
 
 import click
 
 from bankofai.x402_cli import __version__, _tron_patch
+from bankofai.x402_cli.catalog_cmd import catalog as catalog_app
+from bankofai.x402_cli.gateway_search import default_catalog, search_gateway_catalog
 from bankofai.x402_cli.output import OutputMode
 from bankofai.x402_cli.server_cmd import cmd_server
 from bankofai.x402_cli.client_cmd import cmd_client
@@ -55,6 +59,148 @@ def cli() -> None:
     See https://github.com/BofAI/x402-cli for the full guide.
     """
     setup_logging()
+
+
+cli.add_command(catalog_app, name="catalog")
+
+gateway = click.Group(
+    name="gateway",
+    help=(
+        "Run a self-hosted x402 gateway and build provider onboarding assets. "
+        "Use `x402-cli catalog ...` for public marketplace search."
+    ),
+)
+
+GATEWAY_FORWARD_CONTEXT = {
+    "ignore_unknown_options": True,
+    "allow_extra_args": True,
+    "help_option_names": [],
+}
+
+
+def _run_gateway_command(*args: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "bankofai.x402_gateway", *args],
+        check=False,
+    )
+    raise click.exceptions.Exit(code=result.returncode)
+
+
+@gateway.command("search")
+@click.argument("query")
+@click.option(
+    "--catalog",
+    type=str,
+    default=None,
+    help=(
+        "Catalog source: local dist/catalog.json or HTTPS URL. "
+        "Defaults to $X402_CATALOG, $X402_GATEWAY_CATALOG, or the hosted catalog."
+    ),
+)
+@click.option("--limit", "-n", type=int, default=10, help="Maximum result count.")
+@click.option(
+    "--include-blocked",
+    is_flag=True,
+    help="Include providers whose catalog verdict is blocked.",
+)
+@click.option("--json", "output_json", is_flag=True, help="Print machine-readable JSON.")
+def gateway_search(
+    query: str,
+    catalog: str | None,
+    limit: int,
+    include_blocked: bool,
+    output_json: bool,
+) -> None:
+    """Search an x402-gateway catalog for capabilities.
+
+    Example:
+      x402-cli gateway search "token launch"
+    """
+    catalog_source = catalog or default_catalog()
+    try:
+        hits = search_gateway_catalog(
+            query,
+            catalog=catalog_source,
+            limit=limit,
+            include_blocked=include_blocked,
+        )
+    except Exception as exc:
+        raise click.ClickException(f"gateway search failed: {exc}") from exc
+
+    if output_json:
+        click.echo(
+            json.dumps(
+                {
+                    "query": query,
+                    "catalog": catalog_source,
+                    "count": len(hits),
+                    "results": [hit.to_dict() for hit in hits],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+
+    if not hits:
+        click.echo("no matches")
+        raise click.exceptions.Exit(code=1)
+
+    for hit in hits:
+        tags = ",".join(hit.tags) if hit.tags else "-"
+        click.echo(
+            f"{hit.fqn:32s}  score={hit.score:<3d}  "
+            f"category={hit.category:12s}  tags={tags}"
+        )
+        click.echo(f"  {hit.title}")
+        if hit.description:
+            click.echo(f"  {hit.description}")
+        if hit.service_url:
+            click.echo(f"  service: {hit.service_url}")
+        for endpoint in hit.endpoints[:3]:
+            method = str(endpoint.get("method") or "")
+            path = str(endpoint.get("path") or "")
+            paid = endpoint.get("paid")
+            suffix = ""
+            if isinstance(paid, dict):
+                suffix = (
+                    f"  {paid.get('network', '')} "
+                    f"{paid.get('currency', '')} "
+                    f"{paid.get('amount_raw', '')}"
+                ).rstrip()
+            click.echo(f"  {method:6s} {path}{suffix}")
+        click.echo("")
+
+
+@gateway.command("start", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_start(args: tuple[str, ...]) -> None:
+    """Start a self-hosted provider gateway."""
+    _run_gateway_command("server", "start", *args)
+
+
+@gateway.command("check", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_check(args: tuple[str, ...]) -> None:
+    """Validate a local provider.yml file."""
+    _run_gateway_command("server", "check", *args)
+
+
+@gateway.command("scaffold", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_scaffold(args: tuple[str, ...]) -> None:
+    """Write a starter provider.yml file."""
+    _run_gateway_command("server", "scaffold", *args)
+
+
+@gateway.command("catalog", context_settings=GATEWAY_FORWARD_CONTEXT)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def gateway_catalog(args: tuple[str, ...]) -> None:
+    """Run provider catalog build/check/pay-assets commands."""
+    _run_gateway_command("catalog", *args)
+
+
+cli.add_command(gateway, name="gateway")
 
 
 @cli.command()

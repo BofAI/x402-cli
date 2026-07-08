@@ -4,6 +4,34 @@ All notable changes to `bankofai-x402-cli` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-06-24
+
+### Changed
+
+- Point the default hosted catalog URL at `https://x402-catelog.bankofai.io/api/catalog.json`.
+- Refresh CLI README and community examples to use production `x402-gateway.bankofai.io` mainnet routes.
+- Align catalog command fixtures with the merged production provider catalog: SunPump TRON/BSC mainnet `exact_permit` routes.
+
+## [0.6.1b6] — 2026-06-12
+
+### Changed
+
+- Classify token `TRANSFER_FROM_FAILED` settlement reverts as `TOKEN_TRANSFER_FAILED` with a payer balance/token mismatch hint.
+
+## [0.6.1b5] — 2026-06-12
+
+### Changed
+
+- Re-publish the CLI beta after PyPI accepted `0.6.1b2` through `0.6.1b4` files without exposing them in the simple package index.
+
+## [0.6.1b4] — 2026-06-11
+
+### Changed
+
+- Point the default hosted catalog URL at the Bank of AI hosted catalog.
+- Refresh Bank of AI gateway examples to the hosted gateway domain.
+- Cache provider detail and pay JSON files during `x402-cli catalog update`, with remote fallback from catalog `base_url` when local detail files are missing.
+
 ## [0.1.0] — 2026-05-08
 
 First stable release. Consolidates everything from `0.1.0-beta.5` through `0.1.0-beta.17`. The package is `pip install bankofai-x402-cli` (no `--pre` needed) and the binary is `x402-cli`.

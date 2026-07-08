@@ -110,6 +110,21 @@ def classify(err: BaseException) -> FriendlyError:
             ),
         )
 
+    # --- token transfer failed after permit/allowance path reached transferFrom ---
+    if "transfer_from_failed" in lower or "transferfrom failed" in lower:
+        return FriendlyError(
+            code="TOKEN_TRANSFER_FAILED",
+            message=msg,
+            hint=(
+                "The settlement contract reached token transferFrom(), but "
+                "the token transfer reverted. Check that the payer address "
+                "holds enough of the exact token advertised by the provider "
+                "on this network, and that the selected scheme/token matches "
+                "the provider pay JSON. On BSC Testnet, verify the token "
+                "contract and try a smaller --max-amount."
+            ),
+        )
+
     # --- rate limits ---
     if "429" in msg or "too many requests" in lower or "too many pending" in lower:
         return FriendlyError(

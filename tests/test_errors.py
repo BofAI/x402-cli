@@ -59,6 +59,16 @@ def test_evm_insufficient_gas() -> None:
     assert classify(err).code == "INSUFFICIENT_GAS"
 
 
+def test_token_transfer_failed() -> None:
+    err = RuntimeError(
+        "execution reverted: TRANSFER_FROM_FAILED: "
+        "0x08c379a0000000000000000000000000000000000000000000000000000"
+    )
+    fe = classify(err)
+    assert fe.code == "TOKEN_TRANSFER_FAILED"
+    assert "payer address holds enough" in fe.hint
+
+
 def test_rate_limited_429() -> None:
     err = RuntimeError("HTTP 429 Too Many Requests")
     assert classify(err).code == "RATE_LIMITED"
