@@ -607,7 +607,7 @@ function providerFilename(fqn: string): string {
 function defaultCatalogSource(): string {
   return fs.existsSync(cachedCatalogPath())
     ? cachedCatalogPath()
-    : "https://tm-x402-catalog.bankofai.io/api/catalog.json";
+    : "https://x402-catalog.bankofai.io/api/catalog.json";
 }
 
 function remoteBaseFromCatalogPayload(payload: Record<string, any>): string | undefined {
@@ -731,7 +731,7 @@ function submissionCatalog(detail: any): any {
     description,
     useCase,
     i18n: detail.i18n ?? { "zh-CN": zhCopy(title, subtitle, description, useCase) },
-    logo: detail.logo ?? "https://tm-x402-catalog.bankofai.io/assets/providers/default.png",
+    logo: detail.logo ?? "https://x402-catalog.bankofai.io/assets/providers/default.png",
     category: detail.category ?? "other",
     chains: detail.chains ?? [],
     isFirstParty: Boolean(detail.is_first_party ?? detail.isFirstParty),
