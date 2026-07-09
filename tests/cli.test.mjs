@@ -182,10 +182,33 @@ test("catalog export-gateway writes public catalog and pay docs", async () => {
 });
 
 test("gateway check validates provider files", () => {
-  const providerDir = path.resolve(root, "..", "x402-gateway", "providers");
-  const result = run(["gateway", "check", providerDir, "--json"]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).result.count, 28);
+  const providerDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-providers-"));
+  try {
+    const providerFile = path.join(providerDir, "fixture", "provider.yml");
+    mkdirSync(path.dirname(providerFile), { recursive: true });
+    writeFileSync(providerFile, `name: fixture-provider
+forward_url: https://api.example.com
+operator:
+  network: tron-nile
+  recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
+  currencies:
+    usd: ["USDT"]
+  scheme: exact
+  asset_transfer_method: permit2
+endpoints:
+  - method: GET
+    path: /v1/ping
+    metering:
+      dimensions:
+        - tiers:
+            - price_usd: 0.0001
+`);
+    const result = run(["gateway", "check", providerDir, "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).result, { providers: ["fixture-provider"], count: 1 });
+  } finally {
+    rmSync(providerDir, { recursive: true, force: true });
+  }
 });
 
 test("serve daemon supports arbitrary asset decimals", async () => {
