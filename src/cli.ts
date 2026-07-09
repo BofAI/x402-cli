@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { createPaymentPayload, decodeRequired, decodeResponse, encodeRequired, encodeResponse, encodeSignature, headers, PaymentRequirement } from "./x402.js";
@@ -14,6 +15,7 @@ type ParsedOptions = Record<string, string | boolean | string[]>;
 type OutputMode = "human" | "json";
 type FriendlyError = { code: string; message: string; hint: string };
 const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "help", "human", "include-blocked", "json", "version"]);
+const require = createRequire(import.meta.url);
 
 function parseArgs(argv: string[]): { command: string; positional: string[]; options: ParsedOptions } {
   const [command = "help", ...rest] = argv;
@@ -1114,10 +1116,20 @@ function executableInPath(name: string): string | undefined {
   return undefined;
 }
 
+function resolveGatewayPackageRuntime(): string | undefined {
+  try {
+    return require.resolve("@bankofai/x402-gateway/dist/cli.js");
+  } catch {
+    return undefined;
+  }
+}
+
 function gatewayCommand(options: ParsedOptions): { command: string; argsPrefix: string[]; source: string } {
   const explicit = opt(options, "gateway-bin");
+  const gatewayPackageRuntime = resolveGatewayPackageRuntime();
   const candidates = [
     explicit ? { file: explicit, source: "--gateway-bin" } : undefined,
+    gatewayPackageRuntime ? { file: gatewayPackageRuntime, source: "@bankofai/x402-gateway dependency" } : undefined,
     { file: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "gateway", "cli.js"), source: "bundled gateway runtime" },
     executableInPath("x402-gateway") ? { file: executableInPath("x402-gateway")!, source: "PATH x402-gateway" } : undefined,
     { file: path.resolve(process.cwd(), "../x402-gateway/dist/cli.js"), source: "sibling ../x402-gateway" },
@@ -1134,7 +1146,7 @@ function gatewayCommand(options: ParsedOptions): { command: string; argsPrefix: 
     }
   }
   throw new Error(
-    "x402-gateway runtime not found. Install/publish a x402-gateway npm binary, run from a checkout with ../x402-gateway/dist/cli.js, or pass --gateway-bin <path>.",
+    "x402-gateway runtime not found. Install @bankofai/x402-gateway, run from a checkout with ../x402-gateway/dist/cli.js, or pass --gateway-bin <path>.",
   );
 }
 
