@@ -16,6 +16,8 @@ type OutputMode = "human" | "json";
 type FriendlyError = { code: string; message: string; hint: string };
 const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "raw", "version"]);
 const require = createRequire(import.meta.url);
+const DEFAULT_TIMEOUT_MS = 30_000;
+const CATALOG_UPDATE_RETRIES = 3;
 
 class CliError extends Error {
   constructor(
@@ -269,7 +271,7 @@ function classify(error: unknown): FriendlyError {
       hint: "Increase the max amount flag only if this provider price is expected.",
     };
   }
-  if (lower.includes("failed to fetch") || lower.includes("fetch failed") || lower.includes("econnrefused")) {
+  if (lower.includes("failed to fetch") || lower.includes("fetch failed") || lower.includes("econnrefused") || lower.includes("timed out")) {
     return {
       code: "NETWORK_ERROR",
       message,
@@ -325,6 +327,7 @@ Options:
   --dry-run                 Read requirements but do not sign or pay
   --private-key <hex>       Explicit payer private key (or PRIVATE_KEY/TRON_PRIVATE_KEY/EVM_PRIVATE_KEY)
   --rpc-url <url>           Explicit network RPC URL
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --json                    Print JSON envelope
 
 Examples:
@@ -346,6 +349,7 @@ Options:
   --port <port>             Bind port (default: 4020)
   --resource-url <url>      URL advertised in payment requirements
   --facilitator-url <url>   Facilitator base URL
+  --timeout-ms <ms>         Facilitator timeout in milliseconds (default: 30000)
   --daemon                  Run in background and print the child pid
   --json                    Print JSON envelope
 
@@ -392,6 +396,7 @@ Options:
   --provider <fqn>          Provider FQN for export-gateway
   --output-dir <dir>        Output directory for generated files
   -n, --limit <count>       Search result limit
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --include-blocked         Include blocked providers in search
   --json                    Print JSON envelope
 `,
@@ -401,6 +406,7 @@ Options:
 Options:
   --catalog <source>        catalog.json path or URL
   -n, --limit <count>       Search result limit
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --include-blocked         Include blocked providers in search
   --json                    Print JSON envelope
 `,
@@ -409,6 +415,7 @@ Options:
 
 Options:
   --catalog <source>        catalog.json path or URL
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --json                    Print JSON envelope
 `,
     "catalog-pay-json": `Usage:
@@ -416,6 +423,7 @@ Options:
 
 Options:
   --catalog <source>        catalog.json path or URL
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --raw                     Print raw pay payload instead of JSON envelope
   --json                    Print JSON envelope
 `,
@@ -424,6 +432,7 @@ Options:
 
 Options:
   --catalog <source>        catalog.json path or URL
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --json                    Print JSON envelope
 `,
     "catalog-export-gateway": `Usage:
@@ -637,8 +646,8 @@ function scoreFields(terms: string[], fields: Record<string, string[]>): { score
   return { score, matchedFields };
 }
 
-async function readCatalog(source: string): Promise<any[]> {
-  const text = await readText(source);
+async function readCatalog(source: string, options?: ParsedOptions): Promise<any[]> {
+  const text = await readText(source, options);
   const parsed = JSON.parse(text);
   if (Array.isArray(parsed)) return parsed;
   if (Array.isArray(parsed.providers)) return parsed.providers;
@@ -646,25 +655,25 @@ async function readCatalog(source: string): Promise<any[]> {
   return [];
 }
 
-async function readCatalogObject(source: string): Promise<Record<string, any>> {
-  const parsed = JSON.parse(await readText(source));
+async function readCatalogObject(source: string, options?: ParsedOptions): Promise<Record<string, any>> {
+  const parsed = JSON.parse(await readText(source, options));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`expected JSON object from ${source}`);
   }
   return parsed;
 }
 
-async function readText(source: string): Promise<string> {
+async function readText(source: string, options?: ParsedOptions): Promise<string> {
   if (!source.startsWith("http://") && !source.startsWith("https://")) {
     return fs.readFileSync(source, "utf8");
   }
-  const response = await fetch(source);
+  const response = await fetchWithTimeout(source, {}, timeoutMs(options), `fetch ${source}`);
   if (!response.ok) throw new Error(`failed to fetch ${source}: ${response.status}`);
   return response.text();
 }
 
-async function readJson(source: string): Promise<any> {
-  return JSON.parse(await readText(source));
+async function readJson(source: string, options?: ParsedOptions): Promise<any> {
+  return JSON.parse(await readText(source, options));
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -748,19 +757,36 @@ function positiveIntegerOption(options: ParsedOptions, key: string, fallback: nu
   return parsed;
 }
 
+function timeoutMs(options?: ParsedOptions): number {
+  return options ? positiveIntegerOption(options, "timeout-ms", DEFAULT_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+}
+
+async function fetchWithTimeout(input: string | URL, init: RequestInit = {}, timeout = DEFAULT_TIMEOUT_MS, label = "request"): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if ((error as any)?.name === "AbortError") throw new Error(`${label} timed out after ${timeout}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function remoteBaseFromCatalogPayload(payload: Record<string, any>): string | undefined {
   const base = payload.base_url ?? payload.baseUrl;
   return typeof base === "string" && /^https?:\/\//.test(base) ? `${base.replace(/\/+$/, "")}/` : undefined;
 }
 
-async function remoteBaseFromSource(source: string, payload?: Record<string, any>): Promise<string | undefined> {
+async function remoteBaseFromSource(source: string, payload?: Record<string, any>, options?: ParsedOptions): Promise<string | undefined> {
   const fromPayload = payload ? remoteBaseFromCatalogPayload(payload) : undefined;
   if (fromPayload) return fromPayload;
   if (source.startsWith("http://") || source.startsWith("https://")) {
     return `${source.slice(0, source.lastIndexOf("/") + 1)}`;
   }
   try {
-    return remoteBaseFromCatalogPayload(await readCatalogObject(source));
+    return remoteBaseFromCatalogPayload(await readCatalogObject(source, options));
   } catch {
     return undefined;
   }
@@ -786,33 +812,34 @@ function catalogDetailSource(source: string, section: "providers" | "pay", name:
   return path.join(root, section, providerFilename(name));
 }
 
-async function readCatalogProvider(source: string, name: string): Promise<any> {
-  const providers = await readCatalog(source);
+async function readCatalogProvider(source: string, name: string, options?: ParsedOptions): Promise<any> {
+  const providers = await readCatalog(source, options);
   const summary = providers.find((item: any) => item.name === name || item.fqn === name);
   if (!summary) throw new Error(`provider not found: ${name}`);
   const fqn = summary.fqn ?? summary.name ?? name;
   try {
-    return await readJson(catalogDetailSource(source, "providers", fqn));
+    return await readJson(catalogDetailSource(source, "providers", fqn), options);
   } catch {
     return summary;
   }
 }
 
-async function readCatalogPayProvider(source: string, name: string): Promise<any> {
-  const providers = await readCatalog(source);
+async function readCatalogPayProvider(source: string, name: string, options?: ParsedOptions): Promise<any> {
+  const providers = await readCatalog(source, options);
   const summary = providers.find((item: any) => item.name === name || item.fqn === name);
   const fqn = summary?.fqn ?? summary?.name ?? name;
   try {
-    return await readJson(catalogDetailSource(source, "pay", fqn));
+    return await readJson(catalogDetailSource(source, "pay", fqn), options);
   } catch {
-    if (summary) return readCatalogProvider(source, name);
+    if (summary) return readCatalogProvider(source, name, options);
     throw new Error(`provider not found: ${name}`);
   }
 }
 
-async function cacheProviderAssets(source: string, catalogPayload: Record<string, any>): Promise<{ detailCount: number; payCount: number }> {
-  const base = await remoteBaseFromSource(source, catalogPayload);
-  if (!base) return { detailCount: 0, payCount: 0 };
+async function cacheProviderAssets(source: string, catalogPayload: Record<string, any>, options: ParsedOptions): Promise<{ detailCount: number; payCount: number; warnings: string[] }> {
+  const base = await remoteBaseFromSource(source, catalogPayload, options);
+  const warnings: string[] = [];
+  if (!base) return { detailCount: 0, payCount: 0, warnings };
   let detailCount = 0;
   let payCount = 0;
   for (const provider of catalogPayload.providers ?? []) {
@@ -820,33 +847,47 @@ async function cacheProviderAssets(source: string, catalogPayload: Record<string
     if (typeof fqn !== "string" || !fqn) continue;
     const filename = providerFilename(fqn);
     try {
-      const detail = await readJson(new URL(`providers/${filename}`, base).toString());
+      const detail = await readJson(new URL(`providers/${filename}`, base).toString(), options);
       writeJson(path.join(cacheDir(), "providers", filename), detail);
       detailCount += 1;
-    } catch {
-      // A partial cache is still useful.
+    } catch (error) {
+      warnings.push(`failed to cache provider detail ${fqn}: ${error instanceof Error ? error.message : String(error)}`);
     }
     try {
-      const pay = await readJson(new URL(`pay/${filename}`, base).toString());
+      const pay = await readJson(new URL(`pay/${filename}`, base).toString(), options);
       writeJson(path.join(cacheDir(), "pay", filename), pay);
       payCount += 1;
-    } catch {
-      // A partial cache is still useful.
+    } catch (error) {
+      warnings.push(`failed to cache pay JSON ${fqn}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { detailCount, payCount };
+  return { detailCount, payCount, warnings };
 }
 
 async function catalogUpdate(source: string, options: ParsedOptions): Promise<void> {
-  const payload = await readCatalogObject(source);
+  let payload: Record<string, any> | undefined;
+  const warnings: string[] = [];
+  for (let attempt = 1; attempt <= CATALOG_UPDATE_RETRIES; attempt += 1) {
+    try {
+      payload = await readCatalogObject(source, options);
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === CATALOG_UPDATE_RETRIES) throw error;
+      warnings.push(`catalog update attempt ${attempt} failed: ${message}`);
+      await delay(250 * attempt);
+    }
+  }
+  if (!payload) throw new Error(`failed to read catalog from ${source}`);
   writeJson(cachedCatalogPath(), payload);
-  const cached = await cacheProviderAssets(source, payload);
+  const cached = await cacheProviderAssets(source, payload, options);
   const result = {
     source,
     path: cachedCatalogPath(),
     providerCount: payload.provider_count ?? payload.providerCount ?? (payload.providers ?? []).length,
     detailCount: cached.detailCount,
     payCount: cached.payCount,
+    warnings: [...warnings, ...cached.warnings],
   };
   emit({ command: "catalog update", mode: outputMode(options), result });
 }
@@ -950,7 +991,7 @@ async function catalogExportGateway(gatewayUrl: string, options: ParsedOptions):
   const providerFqn = requireArgument(opt(options, "provider"), "--provider", "x402-cli catalog export-gateway <gateway-url> --provider <fqn> [options]");
   sanitizeProviderName(providerFqn);
   const base = gatewayUrl.replace(/\/+$/, "");
-  const detail = await readJson(`${base}/__402/catalog/providers/${providerFilename(providerFqn)}`);
+  const detail = await readJson(`${base}/__402/catalog/providers/${providerFilename(providerFqn)}`, options);
   const outputRoot = opt(options, "output-dir", "providers")!;
   const target = opt(options, "output-dir")
     ? path.resolve(outputRoot)
@@ -996,12 +1037,12 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   };
 }
 
-async function facilitatorPost(baseUrl: string, path: string, body: unknown): Promise<any> {
-  const response = await fetch(new URL(path, baseUrl), {
+async function facilitatorPost(baseUrl: string, path: string, body: unknown, options: ParsedOptions): Promise<any> {
+  const response = await fetchWithTimeout(new URL(path, baseUrl), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, timeoutMs(options), `facilitator ${path}`);
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(`facilitator ${path} failed: ${response.status} ${text}`);
@@ -1121,7 +1162,7 @@ async function serve(options: ParsedOptions): Promise<void> {
       const verify = await facilitatorPost(facilitatorUrl, "/verify", {
         paymentPayload: payload,
         paymentRequirements: requirement,
-      });
+      }, options);
       if (!(verify?.valid === true || verify?.isValid === true)) {
         response.writeHead(400, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "payment verification failed" }));
@@ -1130,7 +1171,7 @@ async function serve(options: ParsedOptions): Promise<void> {
       const settle = await facilitatorPost(facilitatorUrl, "/settle", {
         paymentPayload: payload,
         paymentRequirements: requirement,
-      });
+      }, options);
       if (!(settle?.success === true || settle?.settled === true || typeof settle?.transaction === "string" || typeof settle?.txHash === "string")) {
         response.writeHead(502, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "settlement failed" }));
@@ -1183,11 +1224,11 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   requireArgument(url, "URL", "x402-cli pay <url> [options]");
   const method = opt(options, "method", "GET")!;
   const baseHeaders = requestHeaders(options);
-  const probe = await fetch(url, {
+  const probe = await fetchWithTimeout(url, {
     method,
     headers: baseHeaders,
     body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
-  });
+  }, timeoutMs(options), `fetch ${url}`);
   if (probe.status !== 402) {
     emit({
       command: "client",
@@ -1232,11 +1273,11 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   );
   const retryHeaders = new Headers(baseHeaders);
   retryHeaders.set(headers.signature, encodeSignature(payload));
-  const paid = await fetch(url, {
+  const paid = await fetchWithTimeout(url, {
     method,
     headers: retryHeaders,
     body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
-  });
+  }, timeoutMs(options), `fetch ${url}`);
   const body = await responsePayload(paid);
   const paymentResponse = paid.headers.get(headers.response);
   const result = {
@@ -1423,16 +1464,16 @@ function catalogPayAssets(target: string, options: ParsedOptions): void {
   });
 }
 
-async function readProviderDetailForSearch(source: string, fqn: string): Promise<any> {
+async function readProviderDetailForSearch(source: string, fqn: string, options: ParsedOptions): Promise<any> {
   try {
-    return await readJson(catalogDetailSource(source, "providers", fqn));
+    return await readJson(catalogDetailSource(source, "providers", fqn), options);
   } catch {
     return {};
   }
 }
 
 async function searchCatalog(source: string, query: string, options: ParsedOptions): Promise<SearchHit[]> {
-  const providers = await readCatalog(source);
+  const providers = await readCatalog(source, options);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   const includeBlocked = hasFlag(options, "include-blocked");
@@ -1441,7 +1482,7 @@ async function searchCatalog(source: string, query: string, options: ParsedOptio
     if (provider.block && !includeBlocked) continue;
     const fqn = String(provider.fqn ?? provider.name ?? "");
     if (!fqn) continue;
-    const detail = await readProviderDetailForSearch(source, fqn);
+    const detail = await readProviderDetailForSearch(source, fqn, options);
     const tags = stringList(detail.featured_tags ?? provider.featured_tags ?? detail.tags ?? provider.tags);
     const endpoints = Array.isArray(detail.endpoints) ? detail.endpoints : Array.isArray(provider.endpoints) ? provider.endpoints : [];
     const categoryMeta = detail.category_meta ?? provider.category_meta;
@@ -1551,7 +1592,7 @@ async function catalogSearch(source: string, query: string, options: ParsedOptio
 
 async function catalogShow(source: string, name: string, options: ParsedOptions): Promise<void> {
   requireArgument(name, "provider", "x402-cli catalog show <provider> [--catalog <source>]");
-  const provider = await readCatalogProvider(source, name);
+  const provider = await readCatalogProvider(source, name, options);
   if (outputMode(options) === "json") {
     emit({ command: "catalog show", mode: "json", result: provider });
     return;
@@ -1564,7 +1605,7 @@ async function catalogShow(source: string, name: string, options: ParsedOptions)
 
 async function catalogEndpoints(source: string, name: string, options: ParsedOptions): Promise<void> {
   requireArgument(name, "provider", "x402-cli catalog endpoints <provider> [--catalog <source>]");
-  const provider = await readCatalogProvider(source, name);
+  const provider = await readCatalogProvider(source, name, options);
   const endpoints = provider.endpoints ?? [];
   if (outputMode(options) === "json") {
     emit({ command: "catalog endpoints", mode: "json", result: { provider: provider.fqn ?? provider.name, endpoints } });
@@ -1578,7 +1619,7 @@ async function catalogEndpoints(source: string, name: string, options: ParsedOpt
 
 async function catalogPayJson(source: string, name: string, options: ParsedOptions): Promise<void> {
   requireArgument(name, "provider", "x402-cli catalog pay-json <provider> [--catalog <source>]");
-  const provider = await readCatalogPayProvider(source, name);
+  const provider = await readCatalogPayProvider(source, name, options);
   const endpoint = (provider.endpoints ?? []).find((item: any) => item.paid || item.x402_routes?.length || item.x402Routes?.length) ?? provider.endpoints?.[0];
   if (!endpoint) throw new Error(`provider has no endpoints: ${name}`);
   const result = {

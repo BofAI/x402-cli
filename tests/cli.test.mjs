@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
+import { signTronTypedData } from "../dist/x402.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const cli = path.join(root, "dist", "cli.js");
@@ -176,6 +177,38 @@ test("CLI usage errors are explicit and machine-readable", () => {
   assert.equal(JSON.parse(conflictingOutput.stdout).error.code, "INVALID_ARGUMENT");
 });
 
+test("TRON typed data signing prefers public tronweb API", async () => {
+  const calls = [];
+  const tronWeb = {
+    trx: {
+      signTypedData(domain, types, message, privateKey) {
+        calls.push(["public", domain, types, message, privateKey]);
+        return "abc123";
+      },
+      _signTypedData() {
+        calls.push(["private"]);
+        return "private";
+      },
+    },
+  };
+  const signature = await signTronTypedData(tronWeb, { domain: { name: "x" }, types: { A: [] }, message: { a: 1 } }, "01");
+  assert.equal(signature, "abc123");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "public");
+});
+
+test("pay honors timeout-ms", async () => {
+  await withServer((_request, _response) => {
+    // Keep the request open until the client aborts.
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/slow`, "--timeout-ms", "50", "--json"]);
+    assert.equal(result.status, 1);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.error.code, "NETWORK_ERROR");
+    assert.match(parsed.error.message, /timed out/);
+  });
+});
+
 test("nested command help is specific", () => {
   const gatewayCatalog = run(["gateway", "catalog", "--help"]);
   assert.equal(gatewayCatalog.status, 0);
@@ -228,6 +261,37 @@ test("catalog update caches index, details, and pay json", async () => {
   rmSync(dir, { recursive: true, force: true });
   rmSync(fixture, { recursive: true, force: true });
 });
+
+test("catalog update retries transient catalog fetch failures", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-cache-retry-home-"));
+  let attempts = 0;
+  await withServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://local");
+    if (url.pathname !== "/api/catalog.json") {
+      response.writeHead(404).end("not found");
+      return;
+    }
+    attempts += 1;
+    if (attempts < 3) {
+      response.writeHead(500, { "content-type": "text/plain" });
+      response.end("temporary");
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ version: 1, providers: [], base_url: `http://${request.headers.host}/api/` }));
+  }, async base => {
+    const result = await runAsync(["catalog", "update", "--catalog", `${base}/api/catalog.json`, "--json", "--timeout-ms", "1000"], {
+      env: { HOME: dir },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout).result;
+    assert.equal(parsed.providerCount, 0);
+    assert.equal(parsed.warnings.length, 2);
+    assert.equal(attempts, 3);
+  });
+  rmSync(dir, { recursive: true, force: true });
+});
+
 
 test("catalog export-gateway writes public catalog and pay docs", async () => {
   const out = mkdtempSync(path.join(os.tmpdir(), "x402-cli-export-"));

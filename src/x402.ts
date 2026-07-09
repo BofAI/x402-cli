@@ -142,18 +142,20 @@ async function createTronWallet(privateKey: `0x${string}`) {
   return {
     getAddress: () => address,
     async signTypedData(args: any) {
-      const signature = await tronWeb.trx._signTypedData(
-        args.domain,
-        args.types,
-        args.message,
-        rawKey,
-      );
+      const signature = await signTronTypedData(tronWeb, args, rawKey);
       return signature.startsWith("0x") ? signature : `0x${signature}`;
     },
     async signTransaction(tx: any) {
       return tronWeb.trx.sign(tx, rawKey);
     },
   };
+}
+
+export async function signTronTypedData(tronWeb: Pick<TronWeb, "trx">, args: any, rawPrivateKey: string): Promise<string> {
+  const trx = tronWeb.trx as any;
+  const signer = typeof trx.signTypedData === "function" ? trx.signTypedData.bind(trx) : trx._signTypedData?.bind(trx);
+  if (!signer) throw new Error("tronweb typed-data signing is not available");
+  return signer(args.domain, args.types, args.message, rawPrivateKey);
 }
 
 export async function createPaymentPayload(args: {
