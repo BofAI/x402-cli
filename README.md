@@ -29,6 +29,18 @@ Run the compiled CLI:
 node dist/cli.js <command> [options]
 ```
 
+Common CLI options:
+
+```bash
+x402-cli --help
+x402-cli --version
+x402-cli pay --help
+```
+
+Output is human-readable by default. Add `--json` to commands such as `pay`,
+`serve`, `gateway check`, and `catalog search` for a stable machine-readable
+envelope with `ok`, `command`, `result`, or structured `error` fields.
+
 ## Commands
 
 ### Serve
@@ -96,10 +108,10 @@ Aliases accepted:
 
 ## Facilitator
 
-Set a facilitator URL when needed:
+Pass a facilitator URL when needed:
 
 ```bash
-FACILITATOR_URL=https://facilitator.bankofai.io
+x402-cli serve --facilitator-url https://facilitator.bankofai.io ...
 ```
 
 CLI payment challenges and payload selection always emit `scheme: "exact"` for
