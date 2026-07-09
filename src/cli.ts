@@ -8,13 +8,13 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { createPaymentPayload, decodeRequired, decodeResponse, encodeRequired, encodeResponse, encodeSignature, headers, PaymentRequirement } from "./x402.js";
-import { findTokenByAddress, getToken, normalizeNetwork, toSmallestUnit } from "./tokens.js";
+import { createPaymentPayload, decodeRequired, decodeResponse, decodeSignature, encodeRequired, encodeResponse, encodeSignature, headers, PaymentRequirement } from "./x402.js";
+import { assertRawAmount, findTokenByAddress, getToken, normalizeNetwork, toSmallestUnit } from "./tokens.js";
 
 type ParsedOptions = Record<string, string | boolean | string[]>;
 type OutputMode = "human" | "json";
 type FriendlyError = { code: string; message: string; hint: string };
-const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "help", "human", "include-blocked", "json", "version"]);
+const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "version"]);
 const require = createRequire(import.meta.url);
 
 function parseArgs(argv: string[]): { command: string; positional: string[]; options: ParsedOptions } {
@@ -57,7 +57,7 @@ function parseArgs(argv: string[]): { command: string; positional: string[]; opt
       options[key] = inline;
     } else if (BOOLEAN_FLAGS.has(key)) {
       options[key] = true;
-    } else if (!next || next.startsWith("-")) {
+    } else if (!next || next.startsWith("--")) {
       options[key] = true;
     } else {
       if (key === "header") {
@@ -352,7 +352,10 @@ function readYaml(file: string): any {
 }
 
 function expandEnv(value: string): string {
-  return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => process.env[name] ?? "");
+  return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
+    if (!(name in process.env)) throw new Error(`environment variable \${${name}} is not set`);
+    return process.env[name] ?? "";
+  });
 }
 
 function expandDeep<T>(value: T): T {
@@ -393,6 +396,12 @@ function validateProvider(provider: any, file = "provider.yml"): void {
   for (const [name, value] of required) {
     if (typeof value !== "string" || !value.trim()) throw new Error(`${file}: ${name} is required`);
   }
+  try {
+    const url = new URL(provider.forward_url);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("unsupported protocol");
+  } catch {
+    throw new Error(`${file}: forward_url must be a valid http(s) URL`);
+  }
   if (!Array.isArray(provider.endpoints) || !provider.endpoints.length) {
     throw new Error(`${file}: endpoints must contain at least one endpoint`);
   }
@@ -401,6 +410,11 @@ function validateProvider(provider: any, file = "provider.yml"): void {
     if (typeof endpoint.method !== "string" || typeof endpoint.path !== "string") {
       throw new Error(`${file}: each endpoint needs method and path`);
     }
+    if (!endpoint.method.trim() || !endpoint.path.trim() || !endpoint.path.startsWith("/")) {
+      throw new Error(`${file}: endpoint method/path must be non-empty and path must start with /`);
+    }
+    const price = providerPrice(endpoint);
+    if (!Number.isFinite(price) || price < 0) throw new Error(`${file}: endpoint price_usd must be a finite number >= 0`);
     const key = `${endpoint.method.toUpperCase()} ${endpoint.path}`;
     if (seen.has(key)) throw new Error(`${file}: duplicate endpoint ${key}`);
     seen.add(key);
@@ -604,10 +618,42 @@ function providerFilename(fqn: string): string {
   return `${fqn.replace(/\//g, "__")}.json`;
 }
 
+function sanitizeProviderName(name: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/.test(name) || name.includes("..")) {
+    throw new Error("provider name must be a safe FQN using letters, numbers, dots, underscores, dashes, or slashes");
+  }
+  return name;
+}
+
+function safeOutputPath(baseDir: string, ...parts: string[]): string {
+  const root = path.resolve(baseDir);
+  const target = path.resolve(root, ...parts);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`refusing to write outside output directory: ${target}`);
+  }
+  return target;
+}
+
+function ensureWritable(file: string, options: ParsedOptions): void {
+  if (fs.existsSync(file) && !hasFlag(options, "force")) {
+    throw new Error(`${file} already exists; pass --force to overwrite`);
+  }
+}
+
 function defaultCatalogSource(): string {
+  const envSource = process.env.X402_CATALOG || process.env.X402_GATEWAY_CATALOG;
+  if (envSource) return envSource;
   return fs.existsSync(cachedCatalogPath())
     ? cachedCatalogPath()
     : "https://x402-catalog.bankofai.io/api/catalog.json";
+}
+
+function positiveIntegerOption(options: ParsedOptions, key: string, fallback: number): number {
+  const value = opt(options, key, String(fallback))!;
+  if (!/^\d+$/.test(value)) throw new Error(`--${key} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`--${key} must be a positive integer`);
+  return parsed;
 }
 
 function remoteBaseFromCatalogPayload(payload: Record<string, any>): string | undefined {
@@ -636,7 +682,7 @@ function catalogDetailSource(source: string, section: "providers" | "pay", name:
       : base.pathname.endsWith("/")
         ? base.pathname
         : `${base.pathname}/`;
-    base.pathname = `${pathname}${section}/${name}.json`;
+    base.pathname = `${pathname}${section}/${providerFilename(name)}`;
     base.search = "";
     base.hash = "";
     return base.toString();
@@ -652,7 +698,6 @@ async function readCatalogProvider(source: string, name: string): Promise<any> {
   const providers = await readCatalog(source);
   const summary = providers.find((item: any) => item.name === name || item.fqn === name);
   if (!summary) throw new Error(`provider not found: ${name}`);
-  if (Array.isArray(summary.endpoints) && summary.endpoints.length) return summary;
   const fqn = summary.fqn ?? summary.name ?? name;
   try {
     return await readJson(catalogDetailSource(source, "providers", fqn));
@@ -811,12 +856,18 @@ function payMarkdownFromDetail(detail: any): string {
 async function catalogExportGateway(gatewayUrl: string, options: ParsedOptions): Promise<void> {
   const providerFqn = opt(options, "provider");
   if (!providerFqn) throw new Error("--provider is required");
+  sanitizeProviderName(providerFqn);
   const base = gatewayUrl.replace(/\/+$/, "");
-  const detail = await readJson(`${base}/__402/catalog/providers/${providerFqn}.json`);
-  const target = opt(options, "output-dir", path.join("providers", providerFqn))!;
+  const detail = await readJson(`${base}/__402/catalog/providers/${providerFilename(providerFqn)}`);
+  const outputRoot = opt(options, "output-dir", "providers")!;
+  const target = opt(options, "output-dir")
+    ? path.resolve(outputRoot)
+    : safeOutputPath("providers", providerFilename(providerFqn).replace(/\.json$/, ""));
   fs.mkdirSync(target, { recursive: true });
   const catalogPath = path.join(target, "catalog.json");
   const payMdPath = path.join(target, "pay.md");
+  ensureWritable(catalogPath, options);
+  ensureWritable(payMdPath, options);
   writeJson(catalogPath, submissionCatalog(detail));
   fs.writeFileSync(payMdPath, payMarkdownFromDetail(detail));
   emit({ command: "catalog export-gateway", mode: outputMode(options), result: { provider: providerFqn, catalog: catalogPath, payMd: payMdPath } });
@@ -836,7 +887,10 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   if (!explicitAsset && !registryToken) throw new Error(`unknown token ${tokenSymbol} on ${network}`);
   const decimals = decimalsOption !== undefined ? Number(decimalsOption) : registryToken!.decimals;
   if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
-  const amount = opt(options, "rawAmount") ?? toSmallestUnit(opt(options, "amount", "0.0001")!, decimals);
+  const rawAmount = opt(options, "rawAmount") ?? opt(options, "raw-amount");
+  const humanAmount = opt(options, "amount");
+  if (rawAmount && humanAmount) throw new Error("--amount and --rawAmount are mutually exclusive");
+  const amount = rawAmount ? assertRawAmount(rawAmount, "--rawAmount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
   const assetAddress = explicitAsset ?? registryToken!.address;
   const assetTransferMethod = registryToken?.assetTransferMethod ?? "permit2";
   return {
@@ -877,6 +931,8 @@ function stripFlag(argv: string[], flag: string): string[] {
 }
 
 function serveDaemon(argv: string[], options: ParsedOptions): void {
+  const requirement = buildRequirement(options);
+  if (!requirement.payTo) throw new Error("--pay-to is required");
   const daemonArgs = stripFlag(stripFlag(argv, "--daemon"), "-d");
   const script = fileURLToPath(import.meta.url);
   const child = spawn(process.execPath, [script, ...daemonArgs], {
@@ -891,7 +947,7 @@ function serveDaemon(argv: string[], options: ParsedOptions): void {
   emit({
     command: "server",
     mode: outputMode(options),
-    network: normalizeNetwork(opt(options, "network", "tron:nile")!),
+    network: requirement.network,
     scheme: "exact",
     result: {
       pid: child.pid,
@@ -905,7 +961,7 @@ function serveDaemon(argv: string[], options: ParsedOptions): void {
 function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptions): void {
   const maxRaw = opt(options, "max-rawAmount") ?? opt(options, "max-raw-amount");
   const maxAmount = opt(options, "max-amount");
-  if (maxRaw && BigInt(selected.amount) > BigInt(maxRaw)) {
+  if (maxRaw && BigInt(selected.amount) > BigInt(assertRawAmount(maxRaw, "--max-rawAmount"))) {
     throw new Error(`payment raw amount ${selected.amount} exceeds --max-rawAmount ${maxRaw}`);
   }
   if (maxAmount) {
@@ -938,17 +994,18 @@ async function serve(options: ParsedOptions): Promise<void> {
 
   const server = http.createServer(async (request, response) => {
     try {
-      if (request.url?.startsWith("/health")) {
+      const pathname = new URL(request.url ?? "/", `http://${host}:${port}`).pathname;
+      if (pathname === "/health") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ ok: true }));
         return;
       }
-      if (request.url?.startsWith("/.well-known/x402")) {
+      if (pathname === "/.well-known/x402") {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ network: requirement.network, scheme: "exact", asset: requirement.asset, amount: requirement.amount, payTo: requirement.payTo, pay_url: resourceUrl }));
+        response.end(JSON.stringify({ network: requirement.network, scheme: "exact", asset: requirement.asset, rawAmount: requirement.amount, amount: requirement.amount, payTo: requirement.payTo, pay_url: resourceUrl }));
         return;
       }
-      if (!request.url?.startsWith("/pay")) {
+      if (pathname !== "/pay") {
         response.writeHead(404).end("not found");
         return;
       }
@@ -961,22 +1018,32 @@ async function serve(options: ParsedOptions): Promise<void> {
         response.end(JSON.stringify(challenge));
         return;
       }
-      const payload = Buffer.from(signature, "base64").toString("utf8").startsWith("{")
-        ? JSON.parse(Buffer.from(signature, "base64").toString("utf8"))
-        : signature;
+      let payload: unknown;
+      try {
+        payload = decodeSignature(signature);
+      } catch {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "invalid payment signature" }));
+        return;
+      }
       const verify = await facilitatorPost(facilitatorUrl, "/verify", {
         paymentPayload: payload,
         paymentRequirements: requirement,
       });
-      if (verify?.valid === false || verify?.isValid === false) {
+      if (!(verify?.valid === true || verify?.isValid === true)) {
         response.writeHead(400, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "payment verification failed", verify }));
+        response.end(JSON.stringify({ error: "payment verification failed" }));
         return;
       }
       const settle = await facilitatorPost(facilitatorUrl, "/settle", {
         paymentPayload: payload,
         paymentRequirements: requirement,
       });
+      if (!(settle?.success === true || settle?.settled === true || typeof settle?.transaction === "string" || typeof settle?.txHash === "string")) {
+        response.writeHead(502, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "settlement failed" }));
+        return;
+      }
       response.writeHead(200, {
         "content-type": "application/json",
         [headers.response]: encodeResponse(settle),
@@ -987,13 +1054,18 @@ async function serve(options: ParsedOptions): Promise<void> {
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }
   });
-  server.listen(port, host, () => {
-    emit({
-      command: "server",
-      network: requirement.network,
-      scheme: "exact",
-      mode: outputMode(options),
-      result: { pay_url: resourceUrl, token: opt(options, "token", "USDT"), rawAmount: requirement.amount, pay_to: requirement.payTo },
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      emit({
+        command: "server",
+        network: requirement.network,
+        scheme: "exact",
+        mode: outputMode(options),
+        result: { pay_url: resourceUrl, token: opt(options, "token", "USDT"), rawAmount: requirement.amount, pay_to: requirement.payTo },
+      });
+      resolve();
     });
   });
 }
@@ -1071,7 +1143,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   const paid = await fetch(url, {
     method,
     headers: retryHeaders,
-    body: opt(options, "body"),
+    body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
   });
   const body = await responsePayload(paid);
   const paymentResponse = paid.headers.get(headers.response);
@@ -1330,7 +1402,7 @@ async function searchCatalog(source: string, query: string, options: ParsedOptio
   }
   return hits
     .sort((a, b) => b.score - a.score || a.fqn.localeCompare(b.fqn))
-    .slice(0, Number(opt(options, "limit", "10")));
+    .slice(0, positiveIntegerOption(options, "limit", 10));
 }
 
 function searchHitToJson(hit: SearchHit): Record<string, unknown> {

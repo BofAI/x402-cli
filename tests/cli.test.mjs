@@ -10,18 +10,26 @@ const root = path.resolve(import.meta.dirname, "..");
 const cli = path.join(root, "dist", "cli.js");
 
 function run(args, options = {}) {
+  const env = { ...process.env, ...(options.env ?? {}) };
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete env[key];
+  }
   return spawnSync(process.execPath, [cli, ...args], {
     cwd: options.cwd ?? root,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env,
     encoding: "utf8",
   });
 }
 
 function runAsync(args, options = {}) {
   return new Promise(resolve => {
+    const env = { ...process.env, ...(options.env ?? {}) };
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete env[key];
+    }
     const child = spawn(process.execPath, [cli, ...args], {
       cwd: options.cwd ?? root,
-      env: { ...process.env, ...(options.env ?? {}) },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -116,6 +124,23 @@ test("weighted catalog and gateway search support include-blocked and json outpu
     assert.equal(human.status, 0, human.stderr);
     assert.match(human.stdout, /score=/);
     assert.match(human.stdout, /category=finance/);
+
+    const invalidLimit = run(["catalog", "search", "defi", "--catalog", source, "--limit", "abc", "--json"]);
+    assert.equal(invalidLimit.status, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("catalog env override is honored", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-catalog-env-"));
+  try {
+    catalogFixture(dir);
+    const search = run(["catalog", "search", "defi", "--json"], {
+      env: { X402_CATALOG: path.join(dir, "catalog.json") },
+    });
+    assert.equal(search.status, 0, search.stderr);
+    assert.equal(JSON.parse(search.stdout).count, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -181,6 +206,128 @@ test("catalog export-gateway writes public catalog and pay docs", async () => {
   rmSync(out, { recursive: true, force: true });
 });
 
+test("remote catalog detail and pay files use escaped FQN filenames", async () => {
+  const seen = [];
+  await withServer((request, response) => {
+    seen.push(request.url);
+    const catalog = {
+      version: 1,
+      providers: [{ fqn: "bankofai/demo", title: "Demo" }],
+    };
+    const detail = {
+      fqn: "bankofai/demo",
+      title: "Demo Detail",
+      endpoints: [{ method: "GET", path: "/v1", paid: { network: "tron:nile" } }],
+    };
+    const payload =
+      request.url === "/api/catalog.json" ? catalog :
+      request.url === "/api/providers/bankofai__demo.json" ? detail :
+      request.url === "/api/pay/bankofai__demo.json" ? { ...detail, pay: true } :
+      null;
+    if (!payload) {
+      response.writeHead(404).end("not found");
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(payload));
+  }, async base => {
+    const show = await runAsync(["catalog", "show", "bankofai/demo", "--catalog", `${base}/api/catalog.json`, "--json"]);
+    assert.equal(show.status, 0, show.stderr);
+    assert.match(show.stdout, /Demo Detail/);
+
+    const pay = await runAsync(["catalog", "pay-json", "bankofai/demo", "--catalog", `${base}/api/catalog.json`]);
+    assert.equal(pay.status, 0, pay.stderr);
+    assert.match(pay.stdout, new RegExp("bankofai/demo"));
+  });
+  assert.ok(seen.includes("/api/providers/bankofai__demo.json"));
+  assert.ok(seen.includes("/api/pay/bankofai__demo.json"));
+});
+
+test("catalog export-gateway escapes FQN and refuses to overwrite without force", async () => {
+  const out = mkdtempSync(path.join(os.tmpdir(), "x402-cli-export-safe-"));
+  const detail = {
+    fqn: "bankofai/demo",
+    title: "Demo Provider",
+    endpoints: [{ method: "GET", path: "/v1", metered: true, min_price_usd: 0.1 }],
+  };
+  try {
+    await withServer((request, response) => {
+      if (request.url === "/__402/catalog/providers/bankofai__demo.json") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(detail));
+        return;
+      }
+      response.writeHead(404).end("not found");
+    }, async base => {
+      const first = await runAsync(["catalog", "export-gateway", base, "--provider", "bankofai/demo", "--output-dir", out, "--json"]);
+      assert.equal(first.status, 0, first.stderr);
+      assert.equal(JSON.parse(readFileSync(path.join(out, "catalog.json"), "utf8")).fqn, "bankofai/demo");
+
+      const second = await runAsync(["catalog", "export-gateway", base, "--provider", "bankofai/demo", "--output-dir", out, "--json"]);
+      assert.equal(second.status, 1);
+      assert.match(second.stdout, /already exists/);
+    });
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("amount inputs are strict", () => {
+  const base = [
+    "serve",
+    "--pay-to", "0x0000000000000000000000000000000000000001",
+    "--network", "eip155:97",
+    "--asset", "0x0000000000000000000000000000000000000002",
+    "--decimals", "6",
+    "--daemon",
+    "--json",
+  ];
+  assert.equal(run([...base, "--amount", "1.2345678"]).status, 1);
+  assert.equal(run([...base, "--amount", "1.2.3"]).status, 1);
+  assert.equal(run([...base, "--amount", "-1"]).status, 1);
+  assert.equal(run([...base, "--amount", "1", "--rawAmount", "1"]).status, 1);
+  assert.equal(run([...base, "--rawAmount", "abc"]).status, 1);
+});
+
+test("serve rejects malformed payment signature and exact pay route only", async () => {
+  const port = 49000 + Math.floor(Math.random() * 1000);
+  const started = run([
+    "serve",
+    "--pay-to", "0x0000000000000000000000000000000000000001",
+    "--network", "eip155:97",
+    "--asset", "0x0000000000000000000000000000000000000002",
+    "--decimals", "8",
+    "--amount", "1.25",
+    "--port", String(port),
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(started.status, 0, started.stderr);
+  const pid = JSON.parse(started.stdout).result.pid;
+  try {
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        const health = await fetch(`http://127.0.0.1:${port}/health`);
+        if (health.ok) break;
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    const wrongRoute = await fetch(`http://127.0.0.1:${port}/payanything`);
+    assert.equal(wrongRoute.status, 404);
+    const badSignature = await fetch(`http://127.0.0.1:${port}/pay`, {
+      headers: { "PAYMENT-SIGNATURE": "bad" },
+    });
+    assert.equal(badSignature.status, 400);
+  } finally {
+    try {
+      process.kill(pid);
+    } catch {
+      // Process may already have exited.
+    }
+  }
+});
+
 test("gateway check validates provider files", () => {
   const providerDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-providers-"));
   try {
@@ -206,6 +353,29 @@ endpoints:
     const result = run(["gateway", "check", providerDir, "--json"]);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout).result, { providers: ["fixture-provider"], count: 1 });
+  } finally {
+    rmSync(providerDir, { recursive: true, force: true });
+  }
+});
+
+test("gateway check fails on missing provider environment variables", () => {
+  const providerDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-provider-env-"));
+  try {
+    const providerFile = path.join(providerDir, "provider.yml");
+    writeFileSync(providerFile, `name: env-provider
+forward_url: \${MISSING_X402_TEST_FORWARD_URL}
+operator:
+  network: tron-nile
+  recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
+endpoints:
+  - method: GET
+    path: /v1/ping
+`);
+    const result = run(["gateway", "check", providerDir, "--json"], {
+      env: { MISSING_X402_TEST_FORWARD_URL: undefined },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /MISSING_X402_TEST_FORWARD_URL/);
   } finally {
     rmSync(providerDir, { recursive: true, force: true });
   }

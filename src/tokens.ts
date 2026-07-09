@@ -108,8 +108,16 @@ export function findTokenByAddress(network: string, address: string): TokenInfo 
   );
 }
 
+export function assertRawAmount(value: string, name = "raw amount"): string {
+  if (!/^\d+$/.test(value)) throw new Error(`${name} must be a non-negative integer string`);
+  return value.replace(/^0+(?=\d)/, "");
+}
+
 export function toSmallestUnit(amount: string, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0) throw new Error("token decimals must be a non-negative integer");
+  if (!/^\d+(\.\d+)?$/.test(amount)) throw new Error("amount must be a non-negative decimal string");
   const [whole, fraction = ""] = amount.split(".");
+  if (fraction.length > decimals) throw new Error(`amount has more than ${decimals} decimal places`);
   const padded = (fraction + "0".repeat(decimals)).slice(0, decimals);
-  return (BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(padded || "0")).toString();
+  return assertRawAmount((BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(padded || "0")).toString());
 }
