@@ -110,15 +110,16 @@ test("weighted catalog and gateway search support include-blocked and json outpu
     const search = run(["catalog", "search", "defi", "--catalog", source, "--json"]);
     assert.equal(search.status, 0, search.stderr);
     const parsed = JSON.parse(search.stdout);
-    assert.equal(parsed.count, 1);
-    assert.equal(parsed.results[0].fqn, "alpha");
-    assert.ok(parsed.results[0].score > 0);
-    assert.ok(parsed.results[0].matchedFields.includes("tags"));
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.result.count, 1);
+    assert.equal(parsed.result.results[0].fqn, "alpha");
+    assert.ok(parsed.result.results[0].score > 0);
+    assert.ok(parsed.result.results[0].matchedFields.includes("tags"));
 
     const included = run(["gateway", "search", "defi", "--catalog", source, "--include-blocked", "--json"]);
     assert.equal(included.status, 0, included.stderr);
     const includedJson = JSON.parse(included.stdout);
-    assert.equal(includedJson.count, 2);
+    assert.equal(includedJson.result.count, 2);
 
     const human = run(["gateway", "search", "defi", "--catalog", source]);
     assert.equal(human.status, 0, human.stderr);
@@ -126,7 +127,8 @@ test("weighted catalog and gateway search support include-blocked and json outpu
     assert.match(human.stdout, /category=finance/);
 
     const invalidLimit = run(["catalog", "search", "defi", "--catalog", source, "--limit", "abc", "--json"]);
-    assert.equal(invalidLimit.status, 1);
+    assert.equal(invalidLimit.status, 2);
+    assert.equal(JSON.parse(invalidLimit.stdout).error.code, "INVALID_ARGUMENT");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -140,10 +142,58 @@ test("catalog env override is honored", () => {
       env: { X402_CATALOG: path.join(dir, "catalog.json") },
     });
     assert.equal(search.status, 0, search.stderr);
-    assert.equal(JSON.parse(search.stdout).count, 1);
+    assert.equal(JSON.parse(search.stdout).result.count, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("CLI usage errors are explicit and machine-readable", () => {
+  const unknown = run(["unknown", "--json"]);
+  assert.equal(unknown.status, 2);
+  assert.equal(JSON.parse(unknown.stdout).error.code, "UNKNOWN_COMMAND");
+
+  const missingUrl = run(["pay", "--json"]);
+  assert.equal(missingUrl.status, 2);
+  assert.equal(JSON.parse(missingUrl.stdout).error.code, "MISSING_ARGUMENT");
+
+  const missingProvider = run(["catalog", "show", "--json"], {
+    env: { X402_CATALOG: "http://127.0.0.1:9/catalog.json" },
+  });
+  assert.equal(missingProvider.status, 2);
+  assert.equal(JSON.parse(missingProvider.stdout).error.code, "MISSING_ARGUMENT");
+  assert.doesNotMatch(missingProvider.stdout, /NETWORK_ERROR/);
+
+  const invalidLimit = run(["catalog", "search", "q", "--limit", "0", "--json"], {
+    env: { X402_CATALOG: "http://127.0.0.1:9/catalog.json" },
+  });
+  assert.equal(invalidLimit.status, 2);
+  assert.equal(JSON.parse(invalidLimit.stdout).error.code, "INVALID_ARGUMENT");
+  assert.doesNotMatch(invalidLimit.stdout, /NETWORK_ERROR/);
+
+  const conflictingOutput = run(["catalog", "search", "q", "--json", "--human"]);
+  assert.equal(conflictingOutput.status, 2);
+  assert.equal(JSON.parse(conflictingOutput.stdout).error.code, "INVALID_ARGUMENT");
+});
+
+test("nested command help is specific", () => {
+  const gatewayCatalog = run(["gateway", "catalog", "--help"]);
+  assert.equal(gatewayCatalog.status, 0);
+  assert.match(gatewayCatalog.stdout, /gateway catalog <build\|check\|pay-assets\|search>/);
+
+  const catalogSearch = run(["catalog", "search", "--help"]);
+  assert.equal(catalogSearch.status, 0);
+  assert.match(catalogSearch.stdout, /catalog search <query>/);
+
+  const serveHelp = run(["serve", "--help"]);
+  assert.equal(serveHelp.status, 0);
+  assert.match(serveHelp.stdout, /--raw-amount/);
+  assert.doesNotMatch(serveHelp.stdout, /--rawAmount/);
+
+  const payHelp = run(["pay", "--help"]);
+  assert.equal(payHelp.status, 0);
+  assert.match(payHelp.stdout, /--max-raw-amount/);
+  assert.doesNotMatch(payHelp.stdout, /--max-rawAmount/);
 });
 
 test("catalog update caches index, details, and pay json", async () => {
@@ -285,7 +335,7 @@ test("amount inputs are strict", () => {
   assert.equal(run([...base, "--amount", "1.2345678"]).status, 1);
   assert.equal(run([...base, "--amount", "1.2.3"]).status, 1);
   assert.equal(run([...base, "--amount", "-1"]).status, 1);
-  assert.equal(run([...base, "--amount", "1", "--rawAmount", "1"]).status, 1);
+  assert.equal(run([...base, "--amount", "1", "--rawAmount", "1"]).status, 2);
   assert.equal(run([...base, "--rawAmount", "abc"]).status, 1);
 });
 

@@ -14,8 +14,19 @@ import { assertRawAmount, findTokenByAddress, getToken, normalizeNetwork, toSmal
 type ParsedOptions = Record<string, string | boolean | string[]>;
 type OutputMode = "human" | "json";
 type FriendlyError = { code: string; message: string; hint: string };
-const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "version"]);
+const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "raw", "version"]);
 const require = createRequire(import.meta.url);
+
+class CliError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public hint: string,
+    public exitCode = 1,
+  ) {
+    super(message);
+  }
+}
 
 function parseArgs(argv: string[]): { command: string; positional: string[]; options: ParsedOptions } {
   const [command = "help", ...rest] = argv;
@@ -91,7 +102,17 @@ function hasFlag(options: ParsedOptions, key: string): boolean {
 }
 
 function outputMode(options: ParsedOptions): OutputMode {
+  if (hasFlag(options, "json") && hasFlag(options, "human")) {
+    throw new CliError("INVALID_ARGUMENT", "--json and --human are mutually exclusive", "Pass either --json or --human, not both.", 2);
+  }
   return hasFlag(options, "json") ? "json" : "human";
+}
+
+function requireArgument(value: string | undefined, name: string, usage: string): string {
+  if (value === undefined || value === "") {
+    throw new CliError("MISSING_ARGUMENT", `${name} is required`, `Usage: ${usage}`, 2);
+  }
+  return value;
 }
 
 function optAll(options: ParsedOptions, key: string): string[] {
@@ -149,6 +170,13 @@ function emit(args: {
 
 function classify(error: unknown): FriendlyError {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof CliError) {
+    return {
+      code: error.code,
+      message,
+      hint: error.hint,
+    };
+  }
   const lower = message.toLowerCase();
   if (lower.includes("missing private key") || lower.includes("could not find a wallet")) {
     return {
@@ -248,6 +276,13 @@ function classify(error: unknown): FriendlyError {
       hint: "Check the URL, local server, proxy, and network connectivity.",
     };
   }
+  if (lower.includes(" is required") || lower.includes("must be") || lower.includes("invalid --") || lower.includes("mutually exclusive")) {
+    return {
+      code: lower.includes("required") ? "MISSING_ARGUMENT" : "INVALID_ARGUMENT",
+      message,
+      hint: "Run the command with --help to see valid usage and options.",
+    };
+  }
   return {
     code: "IO_ERROR",
     message,
@@ -281,24 +316,28 @@ Global options:
 Options:
   --method <method>         HTTP method (default: GET)
   --header "Name: Value"    Request header, repeatable
-  --body <body>             Request body for non-GET methods
+  --body <body>             Request body for non-GET/HEAD methods
   --network <caip2>         Require a specific network
   --token <symbol>          Require a specific token
   --scheme <scheme>         Require a specific x402 scheme
   --max-amount <amount>     Maximum human-readable payment amount
-  --max-rawAmount <amount>  Maximum smallest-unit payment amount
+  --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
-  --private-key <hex>       Explicit payer private key
+  --private-key <hex>       Explicit payer private key (or PRIVATE_KEY/TRON_PRIVATE_KEY/EVM_PRIVATE_KEY)
   --rpc-url <url>           Explicit network RPC URL
   --json                    Print JSON envelope
+
+Examples:
+  x402-cli pay https://api.example.com/paid --dry-run --json
+  x402-cli pay https://api.example.com/paid --max-amount 0.01
 `,
     serve: `Usage:
   x402-cli serve --pay-to <address> [options]
 
 Options:
   --pay-to <address>        Recipient wallet address
-  --amount <amount>         Human-readable token amount
-  --rawAmount <amount>      Smallest-unit amount
+  --amount <amount>         Human-readable token amount (default: 0.0001)
+  --raw-amount <amount>     Smallest-unit amount
   --network <caip2>         Payment network (default: tron:nile)
   --token <symbol>          Token symbol (default: USDT)
   --asset <address>         Explicit token address
@@ -309,6 +348,10 @@ Options:
   --facilitator-url <url>   Facilitator base URL
   --daemon                  Run in background and print the child pid
   --json                    Print JSON envelope
+
+Examples:
+  x402-cli serve --pay-to T... --network tron:nile --token USDT
+  x402-cli serve --pay-to 0x... --network eip155:97 --token USDT --amount 0.0001
 `,
     roundtrip: `Usage:
   x402-cli roundtrip --pay-to <address> [serve/pay options]
@@ -322,6 +365,15 @@ Commands:
   check <providers>         Validate provider.yml files
   scaffold <name>           Write a starter provider.yml
   catalog <command>         Build/check/search gateway catalog assets
+`,
+    "gateway-catalog": `Usage:
+  x402-cli gateway catalog <build|check|pay-assets|search> [options]
+
+Commands:
+  build <providers>         Build a local catalog from provider.yml files
+  check <providers>         Validate local provider.yml files
+  pay-assets <providers>    List payable endpoint assets
+  search <query>            Search a catalog artifact
 `,
     catalog: `Usage:
   x402-cli catalog <update|search|show|endpoints|pay-json|export-gateway|build> [options]
@@ -341,7 +393,47 @@ Options:
   --output-dir <dir>        Output directory for generated files
   -n, --limit <count>       Search result limit
   --include-blocked         Include blocked providers in search
-  --json                    Print JSON envelope where supported
+  --json                    Print JSON envelope
+`,
+    "catalog-search": `Usage:
+  x402-cli catalog search <query> [--catalog <source>] [options]
+
+Options:
+  --catalog <source>        catalog.json path or URL
+  -n, --limit <count>       Search result limit
+  --include-blocked         Include blocked providers in search
+  --json                    Print JSON envelope
+`,
+    "catalog-show": `Usage:
+  x402-cli catalog show <provider> [--catalog <source>] [options]
+
+Options:
+  --catalog <source>        catalog.json path or URL
+  --json                    Print JSON envelope
+`,
+    "catalog-pay-json": `Usage:
+  x402-cli catalog pay-json <provider> [--catalog <source>] [options]
+
+Options:
+  --catalog <source>        catalog.json path or URL
+  --raw                     Print raw pay payload instead of JSON envelope
+  --json                    Print JSON envelope
+`,
+    "catalog-endpoints": `Usage:
+  x402-cli catalog endpoints <provider> [--catalog <source>] [options]
+
+Options:
+  --catalog <source>        catalog.json path or URL
+  --json                    Print JSON envelope
+`,
+    "catalog-export-gateway": `Usage:
+  x402-cli catalog export-gateway <gateway-url> --provider <fqn> [options]
+
+Options:
+  --provider <fqn>          Provider FQN to export
+  --output-dir <dir>        Output directory for generated files
+  --force                   Overwrite existing files
+  --json                    Print JSON envelope
 `,
   };
   return sections[topic] ?? sections.root;
@@ -650,9 +742,9 @@ function defaultCatalogSource(): string {
 
 function positiveIntegerOption(options: ParsedOptions, key: string, fallback: number): number {
   const value = opt(options, key, String(fallback))!;
-  if (!/^\d+$/.test(value)) throw new Error(`--${key} must be a positive integer`);
+  if (!/^\d+$/.test(value)) throw new CliError("INVALID_ARGUMENT", `--${key} must be a positive integer`, `Pass --${key} with a value greater than zero.`, 2);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`--${key} must be a positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new CliError("INVALID_ARGUMENT", `--${key} must be a positive integer`, `Pass --${key} with a value greater than zero.`, 2);
   return parsed;
 }
 
@@ -854,8 +946,8 @@ function payMarkdownFromDetail(detail: any): string {
 }
 
 async function catalogExportGateway(gatewayUrl: string, options: ParsedOptions): Promise<void> {
-  const providerFqn = opt(options, "provider");
-  if (!providerFqn) throw new Error("--provider is required");
+  requireArgument(gatewayUrl, "gateway-url", "x402-cli catalog export-gateway <gateway-url> --provider <fqn> [options]");
+  const providerFqn = requireArgument(opt(options, "provider"), "--provider", "x402-cli catalog export-gateway <gateway-url> --provider <fqn> [options]");
   sanitizeProviderName(providerFqn);
   const base = gatewayUrl.replace(/\/+$/, "");
   const detail = await readJson(`${base}/__402/catalog/providers/${providerFilename(providerFqn)}`);
@@ -889,8 +981,8 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
   const rawAmount = opt(options, "rawAmount") ?? opt(options, "raw-amount");
   const humanAmount = opt(options, "amount");
-  if (rawAmount && humanAmount) throw new Error("--amount and --rawAmount are mutually exclusive");
-  const amount = rawAmount ? assertRawAmount(rawAmount, "--rawAmount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
+  if (rawAmount && humanAmount) throw new CliError("INVALID_ARGUMENT", "--amount and --raw-amount are mutually exclusive", "Pass either --amount or --raw-amount, not both.", 2);
+  const amount = rawAmount ? assertRawAmount(rawAmount, "--raw-amount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
   const assetAddress = explicitAsset ?? registryToken!.address;
   const assetTransferMethod = registryToken?.assetTransferMethod ?? "permit2";
   return {
@@ -961,14 +1053,14 @@ function serveDaemon(argv: string[], options: ParsedOptions): void {
 function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptions): void {
   const maxRaw = opt(options, "max-rawAmount") ?? opt(options, "max-raw-amount");
   const maxAmount = opt(options, "max-amount");
-  if (maxRaw && BigInt(selected.amount) > BigInt(assertRawAmount(maxRaw, "--max-rawAmount"))) {
-    throw new Error(`payment raw amount ${selected.amount} exceeds --max-rawAmount ${maxRaw}`);
+  if (maxRaw && BigInt(selected.amount) > BigInt(assertRawAmount(maxRaw, "--max-raw-amount"))) {
+    throw new Error(`payment raw amount ${selected.amount} exceeds --max-raw-amount ${maxRaw}`);
   }
   if (maxAmount) {
     const token = findTokenByAddress(selected.network, selected.asset);
     const decimalsOption = opt(options, "decimals");
     if (!token && decimalsOption === undefined) {
-      throw new Error("cannot evaluate --max-amount for an unknown asset; pass --max-rawAmount or --decimals");
+      throw new Error("cannot evaluate --max-amount for an unknown asset; pass --max-raw-amount or --decimals");
     }
     const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
     if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
@@ -1088,7 +1180,7 @@ function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions
 }
 
 async function pay(url: string, options: ParsedOptions): Promise<void> {
-  if (!url) throw new Error("URL is required");
+  requireArgument(url, "URL", "x402-cli pay <url> [options]");
   const method = opt(options, "method", "GET")!;
   const baseHeaders = requestHeaders(options);
   const probe = await fetch(url, {
@@ -1304,6 +1396,8 @@ function catalogBuild(target: string, options: ParsedOptions): void {
       mode: outputMode(options),
       result: { output, count: providers.length },
     });
+  } else if (outputMode(options) === "json") {
+    emit({ command: "catalog build", mode: "json", result: catalog });
   } else {
     printJson(catalog);
   }
@@ -1322,15 +1416,11 @@ function catalogPayAssets(target: string, options: ParsedOptions): void {
       assetTransferMethod: providerAssetTransferMethod(provider),
     })),
   );
-  if (outputMode(options) === "json") {
-    printJson({ assets: rows, count: rows.length });
-  } else {
-    emit({
-      command: "gateway catalog pay-assets",
-      mode: "human",
-      result: { count: rows.length, assets: rows },
-    });
-  }
+  emit({
+    command: "gateway catalog pay-assets",
+    mode: outputMode(options),
+    result: { count: rows.length, assets: rows },
+  });
 }
 
 async function readProviderDetailForSearch(source: string, fqn: string): Promise<any> {
@@ -1428,10 +1518,11 @@ function searchHitToJson(hit: SearchHit): Record<string, unknown> {
 }
 
 async function catalogSearch(source: string, query: string, options: ParsedOptions): Promise<void> {
+  positiveIntegerOption(options, "limit", 10);
   const hits = await searchCatalog(source, query, options);
   const results = hits.map(searchHitToJson);
   if (outputMode(options) === "json") {
-    printJson({ ok: true, command: "catalog search", query, catalog: source, count: hits.length, results });
+    emit({ command: "catalog search", mode: "json", result: { query, catalog: source, count: hits.length, results } });
     return;
   }
   if (!hits.length) {
@@ -1459,9 +1550,10 @@ async function catalogSearch(source: string, query: string, options: ParsedOptio
 }
 
 async function catalogShow(source: string, name: string, options: ParsedOptions): Promise<void> {
+  requireArgument(name, "provider", "x402-cli catalog show <provider> [--catalog <source>]");
   const provider = await readCatalogProvider(source, name);
   if (outputMode(options) === "json") {
-    printJson({ ok: true, command: "catalog show", result: provider });
+    emit({ command: "catalog show", mode: "json", result: provider });
     return;
   }
   process.stdout.write(`${provider.fqn ?? provider.name} - ${provider.title ?? provider.main_title ?? provider.name}\n`);
@@ -1471,10 +1563,11 @@ async function catalogShow(source: string, name: string, options: ParsedOptions)
 }
 
 async function catalogEndpoints(source: string, name: string, options: ParsedOptions): Promise<void> {
+  requireArgument(name, "provider", "x402-cli catalog endpoints <provider> [--catalog <source>]");
   const provider = await readCatalogProvider(source, name);
   const endpoints = provider.endpoints ?? [];
   if (outputMode(options) === "json") {
-    printJson({ ok: true, command: "catalog endpoints", provider: provider.fqn ?? provider.name, endpoints });
+    emit({ command: "catalog endpoints", mode: "json", result: { provider: provider.fqn ?? provider.name, endpoints } });
     return;
   }
   for (const endpoint of endpoints) {
@@ -1483,32 +1576,35 @@ async function catalogEndpoints(source: string, name: string, options: ParsedOpt
   }
 }
 
-async function catalogPayJson(source: string, name: string): Promise<void> {
+async function catalogPayJson(source: string, name: string, options: ParsedOptions): Promise<void> {
+  requireArgument(name, "provider", "x402-cli catalog pay-json <provider> [--catalog <source>]");
   const provider = await readCatalogPayProvider(source, name);
   const endpoint = (provider.endpoints ?? []).find((item: any) => item.paid || item.x402_routes?.length || item.x402Routes?.length) ?? provider.endpoints?.[0];
   if (!endpoint) throw new Error(`provider has no endpoints: ${name}`);
-  printJson({
+  const result = {
     provider: provider.fqn ?? provider.name,
     url: endpoint.url ?? endpoint.path,
     method: endpoint.method,
     paid: endpoint.paid,
     x402_routes: endpoint.x402_routes ?? endpoint.x402Routes ?? [],
     endpoint,
-  });
+  };
+  if (hasFlag(options, "raw")) printJson(result);
+  else emit({ command: "catalog pay-json", mode: outputMode(options), result });
 }
 
 async function handleGateway(args: string[]): Promise<void> {
   const { command, positional, options } = parseArgs(args);
   if (hasFlag(options, "help") || command === "help") {
-    process.stdout.write(helpText("gateway"));
+    process.stdout.write(helpText(command === "catalog" || positional[0] === "catalog" ? "gateway-catalog" : "gateway"));
     return;
   }
-  if (command === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, positional.join(" "), options);
+  if (command === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, requireArgument(positional.join(" "), "query", "x402-cli gateway search <query> [options]"), options);
   else if (command === "start") await gatewayStart(["--providers", opt(options, "providers", opt(options, "providers-dir", positional[0] ?? "providers"))!, "--host", opt(options, "host", "127.0.0.1")!, "--port", opt(options, "port", "4020")!], options);
   else if (command === "check") gatewayCheck(positional[0] ?? opt(options, "providers", "providers")!, options);
   else if (command === "scaffold") gatewayScaffold(positional[0] ?? "example-provider", options);
   else if (command === "catalog") await handleGatewayCatalog(positional, options);
-  else throw new Error("Usage: x402-cli gateway <search|start|check|scaffold|catalog>");
+  else throw new CliError("UNKNOWN_COMMAND", `Unknown gateway command: ${command}`, "Run x402-cli gateway --help to list commands.", 2);
 }
 
 async function handleGatewayCatalog(positional: string[], options: ParsedOptions): Promise<void> {
@@ -1517,30 +1613,39 @@ async function handleGatewayCatalog(positional: string[], options: ParsedOptions
   if (sub === "build") catalogBuild(target, options);
   else if (sub === "check") gatewayCheck(target, options);
   else if (sub === "pay-assets") catalogPayAssets(target, options);
-  else if (sub === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, positional.slice(2).join(" ") || opt(options, "query", "")!, options);
-  else throw new Error("Usage: x402-cli gateway catalog <build|check|pay-assets|search>");
+  else if (sub === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, requireArgument(positional.slice(2).join(" ") || opt(options, "query"), "query", "x402-cli gateway catalog search <query> [options]"), options);
+  else throw new CliError("UNKNOWN_COMMAND", `Unknown gateway catalog command: ${sub}`, "Run x402-cli gateway catalog --help to list commands.", 2);
 }
 
 async function handleCatalog(args: string[]): Promise<void> {
   const { command, positional, options } = parseArgs(args);
   if (hasFlag(options, "help") || command === "help") {
-    process.stdout.write(helpText("catalog"));
+    const topic = command === "help" ? positional[0] : command;
+    process.stdout.write(helpText(topic ? `catalog-${topic}` : "catalog"));
     return;
   }
   const source = opt(options, "catalog", defaultCatalogSource())!;
   if (command === "update") await catalogUpdate(source, options);
-  else if (command === "search") await catalogSearch(source, positional.join(" "), options);
+  else if (command === "search") await catalogSearch(source, requireArgument(positional.join(" "), "query", "x402-cli catalog search <query> [options]"), options);
   else if (command === "show") await catalogShow(source, positional[0], options);
   else if (command === "endpoints") await catalogEndpoints(source, positional[0], options);
-  else if (command === "pay-json") await catalogPayJson(source, positional[0]);
+  else if (command === "pay-json") await catalogPayJson(source, positional[0], options);
   else if (command === "export-gateway") await catalogExportGateway(positional[0], options);
   else if (command === "build") catalogBuild(positional[0] ?? "providers", options);
-  else throw new Error("Usage: x402-cli catalog <update|search|show|endpoints|pay-json|export-gateway|build>");
+  else throw new CliError("UNKNOWN_COMMAND", `Unknown catalog command: ${command}`, "Run x402-cli catalog --help to list commands.", 2);
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const { command, positional, options } = parseArgs(argv);
+  if (hasFlag(options, "help") && command === "gateway") {
+    await handleGateway(argv.slice(1));
+    return;
+  }
+  if (hasFlag(options, "help") && command === "catalog") {
+    await handleCatalog(argv.slice(1));
+    return;
+  }
   if (command === "--help" || command === "-h" || command === "help" || hasFlag(options, "help")) {
     const topic = command === "help" ? positional[0] : command.startsWith("-") ? undefined : command;
     process.stdout.write(helpText(topic));
@@ -1559,15 +1664,21 @@ async function main(): Promise<void> {
   else if (command === "gateway") await handleGateway(argv.slice(1));
   else if (command === "catalog") await handleCatalog(argv.slice(1));
   else {
-    process.stdout.write(helpText());
+    throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`, "Run x402-cli --help to list commands.", 2);
   }
+}
+
+function errorCommandName(argv: string[]): string {
+  const [first, second] = argv;
+  if ((first === "catalog" || first === "gateway") && second && !second.startsWith("-")) return `${first} ${second}`;
+  return first ?? "x402-cli";
 }
 
 main().catch(error => {
   emit({
-    command: process.argv[2] ?? "x402-cli",
+    command: errorCommandName(process.argv.slice(2)),
     mode: process.argv.includes("--json") ? "json" : "human",
     error: classify(error),
   });
-  process.exit(1);
+  process.exit(error instanceof CliError ? error.exitCode : 1);
 });
