@@ -8,7 +8,7 @@ export type TokenInfo = {
 };
 
 export const TOKENS: Record<string, Record<string, TokenInfo>> = {
-  "tron:mainnet": {
+  "tron:0x2b6653dc": {
     USDT: {
       address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
       decimals: 6,
@@ -26,7 +26,7 @@ export const TOKENS: Record<string, Record<string, TokenInfo>> = {
       assetTransferMethod: "permit2",
     },
   },
-  "tron:nile": {
+  "tron:0xcd8690dc": {
     USDT: {
       address: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
       decimals: 6,
@@ -44,7 +44,7 @@ export const TOKENS: Record<string, Record<string, TokenInfo>> = {
       assetTransferMethod: "permit2",
     },
   },
-  "tron:shasta": {
+  "tron:0x94a9059e": {
     USDT: {
       address: "TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs",
       decimals: 6,
@@ -86,9 +86,15 @@ export const TOKENS: Record<string, Record<string, TokenInfo>> = {
 export function normalizeNetwork(network: string): string {
   return (
     {
-      "tron-mainnet": "tron:mainnet",
-      "tron-shasta": "tron:shasta",
-      "tron-nile": "tron:nile",
+      "tron-mainnet": "tron:0x2b6653dc",
+      "tron:mainnet": "tron:0x2b6653dc",
+      "mainnet": "tron:0x2b6653dc",
+      "tron-shasta": "tron:0x94a9059e",
+      "tron:shasta": "tron:0x94a9059e",
+      "shasta": "tron:0x94a9059e",
+      "tron-nile": "tron:0xcd8690dc",
+      "tron:nile": "tron:0xcd8690dc",
+      "nile": "tron:0xcd8690dc",
       "bsc-mainnet": "eip155:56",
       "bsc-testnet": "eip155:97",
     }[network] ?? network
