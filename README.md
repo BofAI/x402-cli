@@ -3,12 +3,13 @@
 TypeScript command-line client for BankofAI x402 payments. This version uses
 the npm TypeScript SDK packages only:
 
-- `@bankofai/x402-core@1.0.0`
-- `@bankofai/x402-evm@1.0.0`
-- `@bankofai/x402-tron@1.0.0`
+- `@bankofai/x402-core@1.0.1-beta.2`
+- `@bankofai/x402-evm@1.0.1-beta.2`
+- `@bankofai/x402-tron@1.0.1-beta.2`
 
-Stablecoin payments use `scheme=exact` with
-`extra.assetTransferMethod=permit2`.
+Stablecoin payments support `scheme=exact` and TRON `scheme=exact_gasfree`.
+The GasFree flow lets the relayer pay network energy while deducting its fee
+from the payment token, so the payer does not need TRX.
 
 ## Install
 
@@ -74,6 +75,20 @@ node dist/cli.js pay http://127.0.0.1:4020/pay \
   --token USDT
 ```
 
+Pay a TRON GasFree endpoint (the CLI normally selects this automatically from
+the server challenge):
+
+```bash
+TRON_PRIVATE_KEY=<hex> \
+node dist/cli.js pay https://api.example.com/pay \
+  --network tron:nile \
+  --token USDT \
+  --scheme exact_gasfree
+```
+
+Use `--gasfree-api-url <url>` or `X402_GASFREE_API_URL` to override the SDK's
+default relayer endpoint.
+
 For EVM networks use `EVM_PRIVATE_KEY` or `PRIVATE_KEY`.
 
 ### Roundtrip
@@ -114,5 +129,6 @@ Pass a facilitator URL when needed:
 x402-cli serve --facilitator-url https://facilitator.bankofai.io ...
 ```
 
-CLI payment challenges and payload selection always emit `scheme: "exact"` for
-the SDK 1.0 Permit2 path.
+`serve --scheme exact_gasfree` advertises a TRON GasFree requirement. The
+configured facilitator must advertise and settle `exact_gasfree` for that
+network and token.

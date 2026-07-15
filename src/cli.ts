@@ -322,6 +322,7 @@ Options:
   --network <caip2>         Require a specific network
   --token <symbol>          Require a specific token
   --scheme <scheme>         Require a specific x402 scheme
+  --gasfree-api-url <url>   Override the TRON GasFree relayer API URL
   --max-amount <amount>     Maximum human-readable payment amount
   --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
@@ -342,6 +343,7 @@ Options:
   --amount <amount>         Human-readable token amount (default: 0.0001)
   --raw-amount <amount>     Smallest-unit amount
   --network <caip2>         Payment network (default: tron:nile)
+  --scheme <scheme>         Payment scheme: exact or exact_gasfree (default: exact)
   --token <symbol>          Token symbol (default: USDT)
   --asset <address>         Explicit token address
   --decimals <count>        Token decimals for unregistered --asset
@@ -483,7 +485,7 @@ function loadProviderFile(file: string): any {
   const provider = expandDeep(readYaml(file));
   validateProvider(provider, file);
   provider.operator.network = normalizeNetwork(provider.operator.network);
-  provider.operator.scheme = "exact";
+  provider.operator.scheme = provider.operator.scheme ?? "exact";
   return provider;
 }
 
@@ -530,6 +532,10 @@ function providerAssetTransferMethod(provider: any): string {
   return provider.operator?.asset_transfer_method ?? provider.operator?.assetTransferMethod ?? "permit2";
 }
 
+function providerScheme(provider: any): string {
+  return provider.operator?.scheme ?? "exact";
+}
+
 function providerCatalog(provider: any): any {
   return {
     name: provider.name,
@@ -546,7 +552,7 @@ function providerCatalog(provider: any): any {
       upstream_path: endpoint.path,
       description: endpoint.description ?? "",
       paid: providerPrice(endpoint) > 0 ? {
-        scheme: "exact",
+        scheme: providerScheme(provider),
         network: normalizeNetwork(provider.operator.network),
         currency: provider.operator.currencies?.usd?.[0] ?? "USDT",
         price_usd: providerPrice(endpoint),
@@ -554,7 +560,7 @@ function providerCatalog(provider: any): any {
       x402_routes: providerPrice(endpoint) > 0 ? [{
         provider: provider.name,
         network: normalizeNetwork(provider.operator.network),
-        scheme: "exact",
+        scheme: providerScheme(provider),
         assetTransferMethod: providerAssetTransferMethod(provider),
         url: `/providers/${provider.name}${endpoint.path}`,
       }] : [],
@@ -1008,6 +1014,11 @@ async function catalogExportGateway(gatewayUrl: string, options: ParsedOptions):
 
 function buildRequirement(options: ParsedOptions): PaymentRequirement {
   const network = normalizeNetwork(opt(options, "network", "tron:nile")!);
+  const scheme = opt(options, "scheme", "exact")!;
+  if (!["exact", "exact_gasfree"].includes(scheme)) throw new Error(`unsupported scheme ${scheme}`);
+  if (scheme === "exact_gasfree" && !network.startsWith("tron:")) {
+    throw new Error("exact_gasfree is supported only on TRON networks");
+  }
   const tokenSymbol = opt(options, "token", "USDT")!;
   const explicitAsset = opt(options, "asset");
   const registryToken = explicitAsset
@@ -1027,13 +1038,13 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   const assetAddress = explicitAsset ?? registryToken!.address;
   const assetTransferMethod = registryToken?.assetTransferMethod ?? "permit2";
   return {
-    scheme: "exact",
+    scheme,
     network,
     amount,
     asset: assetAddress,
     payTo: opt(options, "pay-to") ?? opt(options, "payTo") ?? "",
     maxTimeoutSeconds: Number(opt(options, "valid-for-seconds", "300")),
-    extra: assetTransferMethod ? { assetTransferMethod } : {},
+    extra: scheme === "exact" && assetTransferMethod ? { assetTransferMethod } : {},
   };
 }
 
@@ -1081,7 +1092,7 @@ function serveDaemon(argv: string[], options: ParsedOptions): void {
     command: "server",
     mode: outputMode(options),
     network: requirement.network,
-    scheme: "exact",
+    scheme: requirement.scheme,
     result: {
       pid: child.pid,
       pay_url: resourceUrl,
@@ -1135,7 +1146,7 @@ async function serve(options: ParsedOptions): Promise<void> {
       }
       if (pathname === "/.well-known/x402") {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ network: requirement.network, scheme: "exact", asset: requirement.asset, rawAmount: requirement.amount, amount: requirement.amount, payTo: requirement.payTo, pay_url: resourceUrl }));
+        response.end(JSON.stringify({ network: requirement.network, scheme: requirement.scheme, asset: requirement.asset, rawAmount: requirement.amount, amount: requirement.amount, payTo: requirement.payTo, pay_url: resourceUrl }));
         return;
       }
       if (pathname !== "/pay") {
@@ -1181,7 +1192,7 @@ async function serve(options: ParsedOptions): Promise<void> {
         "content-type": "application/json",
         [headers.response]: encodeResponse(settle),
       });
-      response.end(JSON.stringify({ success: true, network: requirement.network, scheme: "exact", transaction: settle.transaction ?? settle.txHash ?? null }));
+      response.end(JSON.stringify({ success: true, network: requirement.network, scheme: requirement.scheme, transaction: settle.transaction ?? settle.txHash ?? null }));
     } catch (error) {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
@@ -1194,7 +1205,7 @@ async function serve(options: ParsedOptions): Promise<void> {
       emit({
         command: "server",
         network: requirement.network,
-        scheme: "exact",
+        scheme: requirement.scheme,
         mode: outputMode(options),
         result: { pay_url: resourceUrl, token: opt(options, "token", "USDT"), rawAmount: requirement.amount, pay_to: requirement.payTo },
       });
@@ -1251,7 +1262,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     emit({
       command: "client",
       network: selected.network,
-      scheme: "exact",
+      scheme: selected.scheme,
       mode: outputMode(options),
       result: {
         url,
@@ -1269,6 +1280,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       extensions: required.extensions,
       rpcUrl: opt(options, "rpc-url"),
       privateKey: opt(options, "private-key"),
+      gasfreeApiUrl: opt(options, "gasfree-api-url"),
     }),
   );
   const retryHeaders = new Headers(baseHeaders);
@@ -1293,7 +1305,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   emit({
     command: "client",
     network: selected.network,
-    scheme: "exact",
+    scheme: selected.scheme,
     mode: outputMode(options),
     result,
   });
@@ -1453,7 +1465,7 @@ function catalogPayAssets(target: string, options: ParsedOptions): void {
       network: normalizeNetwork(provider.operator.network),
       currency: provider.operator.currencies?.usd?.[0] ?? "USDT",
       price_usd: providerPrice(endpoint),
-      scheme: "exact",
+      scheme: providerScheme(provider),
       assetTransferMethod: providerAssetTransferMethod(provider),
     })),
   );

@@ -9,6 +9,7 @@ import {
 import { x402Client } from "@bankofai/x402-core/client";
 import { ExactEvmScheme, toClientEvmSigner } from "@bankofai/x402-evm";
 import { ExactTronScheme, createClientTronSigner } from "@bankofai/x402-tron";
+import { registerExactGasFreeTronScheme } from "@bankofai/x402-tron/gasfree/client";
 import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TronWeb } from "tronweb";
@@ -58,6 +59,7 @@ export function decodeResponse(value: string): any {
 }
 
 export function ensurePermit2(requirement: PaymentRequirement): PaymentRequirement {
+  if (requirement.scheme !== "exact") return requirement;
   const extra = { ...(requirement.extra ?? {}) };
   if (!extra.assetTransferMethod) {
     const token = findTokenByAddress(requirement.network, requirement.asset);
@@ -65,7 +67,7 @@ export function ensurePermit2(requirement: PaymentRequirement): PaymentRequireme
       extra.assetTransferMethod = "permit2";
     }
   }
-  return { ...requirement, scheme: "exact", extra };
+  return { ...requirement, extra };
 }
 
 export function paymentRequired(
@@ -166,10 +168,12 @@ export async function createPaymentPayload(args: {
   rpcUrl?: string;
   apiKey?: string;
   allowanceMode?: string;
+  gasfreeApiUrl?: string;
 }): Promise<unknown> {
   const selected = ensurePermit2(args.selected);
   const required = paymentRequired(selected, args.resource, args.extensions);
   if (selected.network.startsWith("eip155:")) {
+    if (selected.scheme !== "exact") throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
     const privateKey = privateKeyFrom(
       ["EVM_PRIVATE_KEY", "AGENT_WALLET_PRIVATE_KEY", "PRIVATE_KEY"],
       args.privateKey,
@@ -197,9 +201,21 @@ export async function createPaymentPayload(args: {
       apiKey: args.apiKey || process.env.TRON_GRID_API_KEY,
       allowanceMode: args.allowanceMode || process.env.X402_TRON_ALLOWANCE_MODE || "auto",
     } as never);
-    return new x402Client()
-      .register(selected.network as `${string}:${string}`, new ExactTronScheme(signer))
-      .createPaymentPayload(required as never);
+    const client = new x402Client();
+    if (selected.scheme === "exact_gasfree") {
+      registerExactGasFreeTronScheme(client, {
+        signer,
+        networks: [selected.network as `${string}:${string}`],
+        ...(args.gasfreeApiUrl || process.env.X402_GASFREE_API_URL
+          ? { schemeOptions: { apiBaseUrls: { [selected.network]: args.gasfreeApiUrl || process.env.X402_GASFREE_API_URL! } } }
+          : {}),
+      });
+    } else if (selected.scheme === "exact") {
+      client.register(selected.network as `${string}:${string}`, new ExactTronScheme(signer));
+    } else {
+      throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
+    }
+    return client.createPaymentPayload(required as never);
   }
   throw new Error(`unsupported network ${selected.network}`);
 }

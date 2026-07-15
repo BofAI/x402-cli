@@ -103,6 +103,82 @@ test("help and version work", () => {
   assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+/);
 });
 
+test("serve advertises exact_gasfree and rejects it on EVM", async () => {
+  const port = 47000 + Math.floor(Math.random() * 1000);
+  const started = run([
+    "serve",
+    "--pay-to", "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+    "--network", "tron:nile",
+    "--scheme", "exact_gasfree",
+    "--port", String(port),
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(started.status, 0, started.stderr);
+  const parsed = JSON.parse(started.stdout);
+  assert.equal(parsed.scheme, "exact_gasfree");
+  const pid = parsed.result.pid;
+  try {
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/pay`);
+        if (response.status !== 402) throw new Error(`unexpected status ${response.status}`);
+        const challenge = await response.json();
+        assert.equal(challenge.accepts[0].scheme, "exact_gasfree");
+        assert.deepEqual(challenge.accepts[0].extra, {});
+        break;
+      } catch (error) {
+        if (i === 19) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  } finally {
+    try {
+      process.kill(pid);
+    } catch {
+      // Process may already have exited.
+    }
+  }
+
+  const evm = run([
+    "serve",
+    "--pay-to", "0x0000000000000000000000000000000000000001",
+    "--network", "eip155:97",
+    "--scheme", "exact_gasfree",
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(evm.status, 1);
+  assert.match(evm.stdout, /supported only on TRON/);
+});
+
+test("pay dry-run preserves an exact_gasfree requirement", async () => {
+  await withServer((request, response) => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: `http://${request.headers.host}/pay` },
+      accepts: [{
+        scheme: "exact_gasfree",
+        network: "tron:nile",
+        amount: "1",
+        asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+        payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+      }],
+    };
+    response.writeHead(402, {
+      "content-type": "application/json",
+      "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    });
+    response.end(JSON.stringify(challenge));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--dry-run", "--scheme", "exact_gasfree", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.scheme, "exact_gasfree");
+    assert.equal(parsed.result.selected.scheme, "exact_gasfree");
+  });
+});
+
 test("weighted catalog and gateway search support include-blocked and json output", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-catalog-"));
   try {
