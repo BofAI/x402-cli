@@ -1225,7 +1225,12 @@ function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions
     if (network && normalizeNetwork(network) !== req.network) return false;
     if (scheme && scheme !== req.scheme) return false;
     if (token) {
-      const tokenInfo = getToken(req.network, token);
+      let tokenInfo;
+      try {
+        tokenInfo = getToken(req.network, token);
+      } catch {
+        return false;
+      }
       if (tokenInfo.address.toLowerCase() !== req.asset.toLowerCase()) return false;
     }
     return true;

@@ -187,6 +187,40 @@ test("pay dry-run preserves an exact_gasfree requirement", async () => {
   });
 });
 
+test("pay skips unknown-network requirements when selecting a token", async () => {
+  await withServer((request, response) => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: `http://${request.headers.host}/pay` },
+      accepts: [
+        {
+          scheme: "exact",
+          network: "eip155:999999",
+          amount: "1",
+          asset: "0x0000000000000000000000000000000000000001",
+          payTo: "0x0000000000000000000000000000000000000002",
+        },
+        {
+          scheme: "exact_gasfree",
+          network: "tron:0xcd8690dc",
+          amount: "1",
+          asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+        },
+      ],
+    };
+    response.writeHead(402, {
+      "content-type": "application/json",
+      "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    });
+    response.end(JSON.stringify(challenge));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--dry-run", "--token", "USDT", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).result.selected.network, "tron:0xcd8690dc");
+  });
+});
+
 test("pay reports non-2xx gateway responses as failures", async () => {
   await withServer((_request, response) => {
     response.writeHead(429, {
