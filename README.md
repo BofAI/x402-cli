@@ -13,6 +13,15 @@ from the payment token, so the payer does not need TRX.
 
 ## Install
 
+Install the CLI package:
+
+```bash
+npm install -g @bankofai/x402-cli
+x402-cli --version
+```
+
+For repository development:
+
 ```bash
 npm install
 npm run build
@@ -61,8 +70,8 @@ The server exposes:
 
 - `GET /health`
 - `GET /.well-known/x402`
-- `GET /pay` returns `402 Payment Required`
-- `POST /pay` verifies and settles with the facilitator
+- `/pay` returns `402 Payment Required` without a payment signature
+- The signed retry uses the same HTTP method, then verifies and settles with the facilitator
 
 ### Pay
 
@@ -74,6 +83,9 @@ node dist/cli.js pay http://127.0.0.1:4020/pay \
   --network tron:0xcd8690dc \
   --token USDT
 ```
+
+For automated or unfamiliar endpoints, set `--max-amount` or
+`--max-raw-amount` before allowing the CLI to sign a payment.
 
 Pay a TRON GasFree endpoint (the CLI normally selects this automatically from
 the server challenge):
@@ -90,6 +102,12 @@ Use `--gasfree-api-url <url>` or `X402_GASFREE_API_URL` to override the SDK's
 default relayer endpoint.
 
 For EVM networks use `EVM_PRIVATE_KEY` or `PRIVATE_KEY`.
+Prefer environment variables over `--private-key` in shared environments,
+because command-line arguments may be visible to other local processes.
+
+If the gateway settles a payment but the upstream request fails, JSON error
+output includes `error.details.paymentResponse` for reconciliation. Do not retry
+such a request blindly; inspect the transaction and provider behavior first.
 
 ### Roundtrip
 

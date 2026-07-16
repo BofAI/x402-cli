@@ -776,7 +776,7 @@ async function fetchWithTimeout(input: string | URL, init: RequestInit = {}, tim
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (error) {
-    if ((error as any)?.name === "AbortError") throw new Error(`${label} timed out after ${timeout}ms`);
+    if (error instanceof Error && error.name === "AbortError") throw new Error(`${label} timed out after ${timeout}ms`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -1336,8 +1336,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
 
 async function roundtrip(options: ParsedOptions): Promise<void> {
   const port = Number(opt(options, "port", "4020"));
-  serve(options);
-  await delay(500);
+  await serve(options);
   await pay(`http://127.0.0.1:${port}/pay`, options);
   process.exit(0);
 }
