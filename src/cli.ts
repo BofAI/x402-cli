@@ -1241,6 +1241,15 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
   }, timeoutMs(options), `fetch ${url}`);
   if (probe.status !== 402) {
+    const body = await responsePayload(probe);
+    if (!probe.ok) {
+      const retryAfter = probe.headers.get("retry-after");
+      throw new Error(
+        `HTTP ${probe.status} from ${url}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}: ${
+          typeof body === "string" ? body.slice(0, 500) : JSON.stringify(body).slice(0, 500)
+        }`,
+      );
+    }
     emit({
       command: "client",
       mode: outputMode(options),
@@ -1248,7 +1257,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
         url,
         status: probe.status,
         message: "Not a payment-required endpoint",
-        response: await responsePayload(probe),
+        response: body,
       },
     });
     return;
@@ -1300,7 +1309,12 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     ...(paymentResponse ? { paymentResponse: decodeResponse(paymentResponse) } : {}),
   };
   if (!paid.ok) {
-    throw new Error(`HTTP ${paid.status} from ${url}: ${typeof body === "string" ? body.slice(0, 500) : JSON.stringify(body).slice(0, 500)}`);
+    const retryAfter = paid.headers.get("retry-after");
+    throw new Error(
+      `HTTP ${paid.status} from ${url}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}: ${
+        typeof body === "string" ? body.slice(0, 500) : JSON.stringify(body).slice(0, 500)
+      }`,
+    );
   }
   emit({
     command: "client",

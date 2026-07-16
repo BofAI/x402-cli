@@ -179,6 +179,24 @@ test("pay dry-run preserves an exact_gasfree requirement", async () => {
   });
 });
 
+test("pay reports non-2xx gateway responses as failures", async () => {
+  await withServer((_request, response) => {
+    response.writeHead(429, {
+      "content-type": "application/json",
+      "retry-after": "36",
+    });
+    response.end(JSON.stringify({ error: "facilitator rate limited" }));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--json"]);
+    assert.equal(result.status, 1);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, "RATE_LIMITED");
+    assert.match(parsed.error.message, /HTTP 429/);
+    assert.match(parsed.error.message, /retry after 36s/);
+  });
+});
+
 test("weighted catalog and gateway search support include-blocked and json output", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-catalog-"));
   try {
