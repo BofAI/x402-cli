@@ -13,7 +13,7 @@ import { assertRawAmount, findTokenByAddress, getToken, normalizeNetwork, toSmal
 
 type ParsedOptions = Record<string, string | boolean | string[]>;
 type OutputMode = "human" | "json";
-type FriendlyError = { code: string; message: string; hint: string };
+type FriendlyError = { code: string; message: string; hint: string; details?: unknown };
 const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "raw", "version"]);
 const require = createRequire(import.meta.url);
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -25,6 +25,7 @@ class CliError extends Error {
     message: string,
     public hint: string,
     public exitCode = 1,
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -152,6 +153,7 @@ function emit(args: {
     process.stderr.write(`ERROR ${args.command}: ${args.error.code}\n`);
     process.stderr.write(`  ${args.error.message}\n`);
     if (args.error.hint) process.stderr.write(`  hint: ${args.error.hint}\n`);
+    if (args.error.details !== undefined) process.stderr.write(`  details: ${JSON.stringify(args.error.details)}\n`);
     return;
   }
   const suffix = [args.network, args.scheme].filter(Boolean).join(" ");
@@ -177,6 +179,7 @@ function classify(error: unknown): FriendlyError {
       code: error.code,
       message,
       hint: error.hint,
+      details: error.details,
     };
   }
   const lower = message.toLowerCase();
@@ -1310,10 +1313,16 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   };
   if (!paid.ok) {
     const retryAfter = paid.headers.get("retry-after");
-    throw new Error(
+    throw new CliError(
+      paid.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR",
       `HTTP ${paid.status} from ${url}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}: ${
         typeof body === "string" ? body.slice(0, 500) : JSON.stringify(body).slice(0, 500)
       }`,
+      paymentResponse
+        ? "The gateway reports that payment was settled; retain paymentResponse for support or reconciliation."
+        : "Inspect the HTTP response and retry only when it is safe to do so.",
+      1,
+      result,
     );
   }
   emit({

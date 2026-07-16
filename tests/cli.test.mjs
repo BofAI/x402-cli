@@ -205,6 +205,50 @@ test("pay reports non-2xx gateway responses as failures", async () => {
   });
 });
 
+test("pay preserves settlement details from a failed paid response", async () => {
+  let requests = 0;
+  await withServer((request, response) => {
+    requests += 1;
+    if (requests === 1) {
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://${request.headers.host}/pay` },
+        accepts: [{
+          scheme: "exact",
+          network: "eip155:97",
+          amount: "1",
+          asset: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+          payTo: "0x0000000000000000000000000000000000000001",
+          maxTimeoutSeconds: 300,
+          extra: { assetTransferMethod: "permit2" },
+        }],
+      };
+      response.writeHead(402, {
+        "content-type": "application/json",
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+      });
+      return response.end(JSON.stringify(challenge));
+    }
+    const settlement = { success: true, transaction: "settled-transaction" };
+    response.writeHead(502, {
+      "content-type": "application/json",
+      "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(settlement)).toString("base64"),
+    });
+    response.end(JSON.stringify({ error: "upstream failed after payment settlement", settled: true }));
+  }, async base => {
+    const result = await runAsync([
+      "pay", `${base}/pay`, "--json",
+      "--private-key", `0x${"01".repeat(32)}`,
+    ]);
+    assert.equal(result.status, 1, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, "HTTP_ERROR");
+    assert.equal(parsed.error.details.status, 502);
+    assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
+  });
+});
+
 test("weighted catalog and gateway search support include-blocked and json output", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-catalog-"));
   try {
