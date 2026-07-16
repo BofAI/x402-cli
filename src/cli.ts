@@ -342,7 +342,7 @@ Options:
   --pay-to <address>        Recipient wallet address
   --amount <amount>         Human-readable token amount (default: 0.0001)
   --raw-amount <amount>     Smallest-unit amount
-  --network <caip2>         Payment network (default: tron:nile)
+  --network <caip2>         Payment network (default: tron:0xcd8690dc)
   --scheme <scheme>         Payment scheme: exact or exact_gasfree (default: exact)
   --token <symbol>          Token symbol (default: USDT)
   --asset <address>         Explicit token address
@@ -356,7 +356,7 @@ Options:
   --json                    Print JSON envelope
 
 Examples:
-  x402-cli serve --pay-to T... --network tron:nile --token USDT
+  x402-cli serve --pay-to T... --network tron:0xcd8690dc --token USDT
   x402-cli serve --pay-to 0x... --network eip155:97 --token USDT --amount 0.0001
 `,
     roundtrip: `Usage:
@@ -1013,7 +1013,7 @@ async function catalogExportGateway(gatewayUrl: string, options: ParsedOptions):
 }
 
 function buildRequirement(options: ParsedOptions): PaymentRequirement {
-  const network = normalizeNetwork(opt(options, "network", "tron:nile")!);
+  const network = normalizeNetwork(opt(options, "network", "tron:0xcd8690dc")!);
   const scheme = opt(options, "scheme", "exact")!;
   if (!["exact", "exact_gasfree"].includes(scheme)) throw new Error(`unsupported scheme ${scheme}`);
   if (scheme === "exact_gasfree" && !network.startsWith("tron:")) {
@@ -1424,7 +1424,7 @@ routing:
   type: proxy
 
 operator:
-  network: tron-nile
+  network: tron:0xcd8690dc
   currencies:
     usd: ["USDT"]
   recipient: <provider-recipient-address>

@@ -6,6 +6,7 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { signTronTypedData } from "../dist/x402.js";
+import { normalizeNetwork } from "../dist/tokens.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const cli = path.join(root, "dist", "cli.js");
@@ -63,7 +64,7 @@ function catalogFixture(dir) {
   const catalog = {
     version: 1,
     providers: [
-      { fqn: "alpha", title: "Alpha", category: "finance", featured_tags: ["defi"], chains: ["tron:nile"] },
+      { fqn: "alpha", title: "Alpha", category: "finance", featured_tags: ["defi"], chains: ["tron:0xcd8690dc"] },
       { fqn: "blocked", title: "Blocked", category: "security", block: true, featured_tags: ["defi"] },
     ],
   };
@@ -72,7 +73,7 @@ function catalogFixture(dir) {
     title: "Alpha Provider",
     category: "finance",
     service_url: "https://alpha.example",
-    chains: ["tron:nile"],
+    chains: ["tron:0xcd8690dc"],
     featured_tags: ["defi", "tvl"],
     endpoints: [
       {
@@ -80,7 +81,7 @@ function catalogFixture(dir) {
         path: "/protocols",
         url: "https://gateway.example/providers/alpha/protocols",
         description: "DeFi TVL endpoint",
-        paid: { network: "tron:nile", currency: "USDT", amount_raw: "1" },
+        paid: { network: "tron:0xcd8690dc", currency: "USDT", amount_raw: "1" },
       },
     ],
   };
@@ -103,12 +104,19 @@ test("help and version work", () => {
   assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+/);
 });
 
+test("legacy TRON aliases normalize to canonical CAIP-2 IDs", () => {
+  assert.equal(normalizeNetwork("tron:nile"), "tron:0xcd8690dc");
+  assert.equal(normalizeNetwork("tron-nile"), "tron:0xcd8690dc");
+  assert.equal(normalizeNetwork("tron:mainnet"), "tron:0x2b6653dc");
+  assert.equal(normalizeNetwork("tron:shasta"), "tron:0x94a9059e");
+});
+
 test("serve advertises exact_gasfree and rejects it on EVM", async () => {
   const port = 47000 + Math.floor(Math.random() * 1000);
   const started = run([
     "serve",
     "--pay-to", "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
-    "--network", "tron:nile",
+    "--network", "tron:0xcd8690dc",
     "--scheme", "exact_gasfree",
     "--port", String(port),
     "--daemon",
@@ -159,7 +167,7 @@ test("pay dry-run preserves an exact_gasfree requirement", async () => {
       resource: { url: `http://${request.headers.host}/pay` },
       accepts: [{
         scheme: "exact_gasfree",
-        network: "tron:nile",
+        network: "tron:0xcd8690dc",
         amount: "1",
         asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
         payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
@@ -395,7 +403,7 @@ test("catalog export-gateway writes public catalog and pay docs", async () => {
     subtitle: "Alpha subtitle",
     description: "Alpha description",
     category: "finance",
-    chains: ["tron:nile"],
+    chains: ["tron:0xcd8690dc"],
     endpoints: [{ method: "GET", path: "/v1", url: "https://gateway.example/v1", metered: true, min_price_usd: 0.1 }],
   };
   await withServer((request, response) => {
@@ -425,7 +433,7 @@ test("remote catalog detail and pay files use escaped FQN filenames", async () =
     const detail = {
       fqn: "bankofai/demo",
       title: "Demo Detail",
-      endpoints: [{ method: "GET", path: "/v1", paid: { network: "tron:nile" } }],
+      endpoints: [{ method: "GET", path: "/v1", paid: { network: "tron:0xcd8690dc" } }],
     };
     const payload =
       request.url === "/api/catalog.json" ? catalog :
@@ -544,7 +552,7 @@ test("gateway check validates provider files", () => {
     writeFileSync(providerFile, `name: fixture-provider
 forward_url: https://api.example.com
 operator:
-  network: tron-nile
+  network: tron:0xcd8690dc
   recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
   currencies:
     usd: ["USDT"]
@@ -573,7 +581,7 @@ test("gateway check fails on missing provider environment variables", () => {
     writeFileSync(providerFile, `name: env-provider
 forward_url: \${MISSING_X402_TEST_FORWARD_URL}
 operator:
-  network: tron-nile
+  network: tron:0xcd8690dc
   recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
 endpoints:
   - method: GET

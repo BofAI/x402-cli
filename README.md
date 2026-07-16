@@ -3,9 +3,9 @@
 TypeScript command-line client for BankofAI x402 payments. This version uses
 the npm TypeScript SDK packages only:
 
-- `@bankofai/x402-core@1.0.1-beta.2`
-- `@bankofai/x402-evm@1.0.1-beta.2`
-- `@bankofai/x402-tron@1.0.1-beta.2`
+- `@bankofai/x402-core@1.0.1-beta.4`
+- `@bankofai/x402-evm@1.0.1-beta.4`
+- `@bankofai/x402-tron@1.0.1-beta.4`
 
 Stablecoin payments support `scheme=exact` and TRON `scheme=exact_gasfree`.
 The GasFree flow lets the relayer pay network energy while deducting its fee
@@ -21,7 +21,7 @@ npm run build
 Run from source during development:
 
 ```bash
-npm run dev -- serve --pay-to <recipient> --amount 0.0001 --network tron:nile --token USDT
+npm run dev -- serve --pay-to <recipient> --amount 0.0001 --network tron:0xcd8690dc --token USDT
 ```
 
 Run the compiled CLI:
@@ -52,7 +52,7 @@ Start a local x402 paywall endpoint:
 node dist/cli.js serve \
   --pay-to <recipient> \
   --amount 0.0001 \
-  --network tron:nile \
+  --network tron:0xcd8690dc \
   --token USDT \
   --port 4020
 ```
@@ -71,7 +71,7 @@ Pay an x402-protected URL:
 ```bash
 TRON_PRIVATE_KEY=<hex> \
 node dist/cli.js pay http://127.0.0.1:4020/pay \
-  --network tron:nile \
+  --network tron:0xcd8690dc \
   --token USDT
 ```
 
@@ -81,7 +81,7 @@ the server challenge):
 ```bash
 TRON_PRIVATE_KEY=<hex> \
 node dist/cli.js pay https://api.example.com/pay \
-  --network tron:nile \
+  --network tron:0xcd8690dc \
   --token USDT \
   --scheme exact_gasfree
 ```
@@ -100,7 +100,7 @@ TRON_PRIVATE_KEY=<hex> \
 node dist/cli.js roundtrip \
   --pay-to <recipient> \
   --amount 0.0001 \
-  --network tron:nile \
+  --network tron:0xcd8690dc \
   --token USDT
 ```
 
@@ -108,16 +108,17 @@ node dist/cli.js roundtrip \
 
 Supported built-in token registry:
 
-- `tron:mainnet` USDT, USDD
-- `tron:nile` USDT, USDD
-- `tron:shasta` USDT
+- `tron:0x2b6653dc` USDT, USDD
+- `tron:0xcd8690dc` USDT, USDD
+- `tron:0x94a9059e` USDT
 - `eip155:56` USDT
 - `eip155:97` USDT, USDC
 
-Aliases accepted:
+Legacy aliases remain accepted for backward compatibility, but new commands and
+configuration should use the canonical IDs above:
 
-- `tron-mainnet` -> `tron:mainnet`
-- `tron-nile` -> `tron:nile`
+- `tron-mainnet` -> `tron:0x2b6653dc`
+- `tron-nile` -> `tron:0xcd8690dc`
 - `bsc-mainnet` -> `eip155:56`
 - `bsc-testnet` -> `eip155:97`
 
