@@ -104,11 +104,11 @@ test("help and version work", () => {
   assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+/);
 });
 
-test("legacy TRON aliases normalize to canonical CAIP-2 IDs", () => {
-  assert.equal(normalizeNetwork("tron:nile"), "tron:0xcd8690dc");
-  assert.equal(normalizeNetwork("tron-nile"), "tron:0xcd8690dc");
-  assert.equal(normalizeNetwork("tron:mainnet"), "tron:0x2b6653dc");
-  assert.equal(normalizeNetwork("tron:shasta"), "tron:0x94a9059e");
+test("legacy TRON aliases are rejected in favor of canonical CAIP-2 IDs", () => {
+  assert.throws(() => normalizeNetwork("tron:nile"), /use tron:0xcd8690dc/);
+  assert.throws(() => normalizeNetwork("tron-nile"), /use tron:0xcd8690dc/);
+  assert.throws(() => normalizeNetwork("tron:mainnet"), /use tron:0x2b6653dc/);
+  assert.throws(() => normalizeNetwork("tron:shasta"), /use tron:0x94a9059e/);
 });
 
 test("serve advertises exact_gasfree and rejects it on EVM", async () => {

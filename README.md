@@ -114,11 +114,10 @@ Supported built-in token registry:
 - `eip155:56` USDT
 - `eip155:97` USDT, USDC
 
-Legacy aliases remain accepted for backward compatibility, but new commands and
-configuration should use the canonical IDs above:
+Non-CAIP TRON aliases are rejected. Use the canonical TRON IDs above.
 
-- `tron-mainnet` -> `tron:0x2b6653dc`
-- `tron-nile` -> `tron:0xcd8690dc`
+EVM convenience aliases accepted:
+
 - `bsc-mainnet` -> `eip155:56`
 - `bsc-testnet` -> `eip155:97`
 
