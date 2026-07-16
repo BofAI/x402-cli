@@ -326,6 +326,8 @@ Options:
   --token <symbol>          Require a specific token
   --scheme <scheme>         Require a specific x402 scheme
   --gasfree-api-url <url>   Override the TRON GasFree relayer API URL
+  --max-gasfree-fee <amt>   Maximum GasFree relayer fee in token units
+  --max-gasfree-fee-raw <n> Maximum GasFree relayer fee in smallest units
   --max-amount <amount>     Maximum human-readable payment amount
   --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
@@ -1125,6 +1127,28 @@ function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptio
   }
 }
 
+function gasfreeFeeLimitRaw(selected: PaymentRequirement, options: ParsedOptions): string | undefined {
+  const maxRaw = opt(options, "max-gasfree-fee-raw");
+  const maxHuman = opt(options, "max-gasfree-fee");
+  if (maxRaw && maxHuman) {
+    throw new CliError("INVALID_ARGUMENT", "--max-gasfree-fee and --max-gasfree-fee-raw are mutually exclusive", "Pass one GasFree fee limit.", 2);
+  }
+  if (selected.scheme !== "exact_gasfree") {
+    if (maxRaw || maxHuman) throw new Error("GasFree fee limits require an exact_gasfree payment requirement");
+    return undefined;
+  }
+  if (maxRaw) return assertRawAmount(maxRaw, "--max-gasfree-fee-raw");
+  if (!maxHuman) return undefined;
+  const token = findTokenByAddress(selected.network, selected.asset);
+  const decimalsOption = opt(options, "decimals");
+  if (!token && decimalsOption === undefined) {
+    throw new Error("cannot evaluate --max-gasfree-fee for an unknown asset; pass --max-gasfree-fee-raw or --decimals");
+  }
+  const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
+  if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
+  return toSmallestUnit(maxHuman, decimals);
+}
+
 async function serve(options: ParsedOptions): Promise<void> {
   const host = opt(options, "host", "127.0.0.1")!;
   const port = Number(opt(options, "port", "4020"));
@@ -1275,6 +1299,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   const required = decodeRequired(header);
   const selected = selectRequirement(required.accepts ?? [], options);
   validateAmountLimits(selected, options);
+  const maxGasfreeFeeRaw = gasfreeFeeLimitRaw(selected, options);
   if (options["dry-run"]) {
     emit({
       command: "client",
@@ -1290,7 +1315,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     });
     return;
   }
-  const payload = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
+  const creation = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
     createPaymentPayload({
       selected,
       resource: required.resource?.url ?? url,
@@ -1298,10 +1323,11 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       rpcUrl: opt(options, "rpc-url"),
       privateKey: opt(options, "private-key"),
       gasfreeApiUrl: opt(options, "gasfree-api-url"),
+      maxGasfreeFeeRaw,
     }),
   );
   const retryHeaders = new Headers(baseHeaders);
-  retryHeaders.set(headers.signature, encodeSignature(payload));
+  retryHeaders.set(headers.signature, encodeSignature(creation.payload));
   const paid = await fetchWithTimeout(url, {
     method,
     headers: retryHeaders,
@@ -1309,12 +1335,20 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   }, timeoutMs(options), `fetch ${url}`);
   const body = await responsePayload(paid);
   const paymentResponse = paid.headers.get(headers.response);
+  const settlement = paymentResponse ? decodeResponse(paymentResponse) : undefined;
+  const settled = settlement !== undefined;
   const result = {
     url,
     status: paid.status,
-    paid: paid.ok,
+    paid: settled,
+    settled,
+    delivered: paid.ok,
     response: body,
-    ...(paymentResponse ? { paymentResponse: decodeResponse(paymentResponse) } : {}),
+    ...(settlement !== undefined ? {
+      paymentResponse: settlement,
+      transaction: settlement?.transaction ?? settlement?.txHash ?? null,
+    } : {}),
+    ...(creation.gasfreeEstimate ? { gasfreeEstimate: creation.gasfreeEstimate } : {}),
   };
   if (!paid.ok) {
     const retryAfter = paid.headers.get("retry-after");

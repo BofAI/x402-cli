@@ -101,6 +101,24 @@ node dist/cli.js pay https://api.example.com/pay \
 Use `--gasfree-api-url <url>` or `X402_GASFREE_API_URL` to override the SDK's
 default relayer endpoint.
 
+GasFree fees are separate from the advertised payment amount. Set a fee limit
+so the CLI estimates the relayer fee and rejects the payment before signing if
+the estimate is too high:
+
+```bash
+x402-cli pay https://api.example.com/pay \
+  --scheme exact_gasfree \
+  --max-amount 0.01 \
+  --max-gasfree-fee 0.5 \
+  --json
+```
+
+Use `--max-gasfree-fee-raw` to express the fee limit in the token's smallest
+unit. Successful and failed paid responses distinguish `settled` (payment
+completed) from `delivered` (HTTP business response succeeded). A settled
+upstream failure has `paid=true`, `settled=true`, and `delivered=false` and
+includes its transaction information.
+
 For EVM networks use `EVM_PRIVATE_KEY` or `PRIVATE_KEY`.
 Prefer environment variables over `--private-key` in shared environments,
 because command-line arguments may be visible to other local processes.

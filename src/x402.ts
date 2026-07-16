@@ -9,7 +9,7 @@ import {
 import { x402Client } from "@bankofai/x402-core/client";
 import { ExactEvmScheme, toClientEvmSigner } from "@bankofai/x402-evm";
 import { ExactTronScheme, createClientTronSigner } from "@bankofai/x402-tron";
-import { registerExactGasFreeTronScheme } from "@bankofai/x402-tron/gasfree/client";
+import { ExactGasFreeTronScheme, createGasFreeApiClients, getGasFreeApiBaseUrl } from "@bankofai/x402-tron/gasfree";
 import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TronWeb } from "tronweb";
@@ -169,7 +169,8 @@ export async function createPaymentPayload(args: {
   apiKey?: string;
   allowanceMode?: string;
   gasfreeApiUrl?: string;
-}): Promise<unknown> {
+  maxGasfreeFeeRaw?: string;
+}): Promise<{ payload: unknown; gasfreeEstimate?: { fee: string; total: string } }> {
   const selected = ensurePermit2(args.selected);
   const required = paymentRequired(selected, args.resource, args.extensions);
   if (selected.network.startsWith("eip155:")) {
@@ -184,9 +185,10 @@ export async function createPaymentPayload(args: {
     const publicClient = rpcUrl ? createPublicClient({ transport: http(rpcUrl) }) : undefined;
     const signer = toClientEvmSigner(account, publicClient);
     const scheme = new ExactEvmScheme(signer, rpcUrl ? { rpcUrl } : undefined);
-    return new x402Client()
+    const payload = await new x402Client()
       .register(selected.network as `${string}:${string}`, scheme)
       .createPaymentPayload(required as never);
+    return { payload };
   }
   if (selected.network.startsWith("tron:")) {
     const privateKey = privateKeyFrom(
@@ -202,20 +204,27 @@ export async function createPaymentPayload(args: {
       allowanceMode: args.allowanceMode || process.env.X402_TRON_ALLOWANCE_MODE || "auto",
     } as never);
     const client = new x402Client();
+    let gasfreeEstimate: { fee: string; total: string } | undefined;
     if (selected.scheme === "exact_gasfree") {
-      registerExactGasFreeTronScheme(client, {
-        signer,
-        networks: [selected.network as `${string}:${string}`],
-        ...(args.gasfreeApiUrl || process.env.X402_GASFREE_API_URL
-          ? { schemeOptions: { apiBaseUrls: { [selected.network]: args.gasfreeApiUrl || process.env.X402_GASFREE_API_URL! } } }
-          : {}),
+      const apiUrl = args.gasfreeApiUrl || process.env.X402_GASFREE_API_URL || getGasFreeApiBaseUrl(selected.network);
+      const scheme = new ExactGasFreeTronScheme(signer, {
+        apiClients: createGasFreeApiClients({ [selected.network]: apiUrl }),
       });
+      const total = await scheme.estimateCost(selected as never);
+      const amount = BigInt(selected.amount);
+      const fee = total - amount;
+      if (args.maxGasfreeFeeRaw !== undefined && fee > BigInt(args.maxGasfreeFeeRaw)) {
+        throw new Error(`estimated GasFree fee ${fee} exceeds --max-gasfree-fee limit ${args.maxGasfreeFeeRaw}`);
+      }
+      gasfreeEstimate = { fee: fee.toString(), total: total.toString() };
+      client.register(selected.network as `${string}:${string}`, scheme);
     } else if (selected.scheme === "exact") {
       client.register(selected.network as `${string}:${string}`, new ExactTronScheme(signer));
     } else {
       throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
     }
-    return client.createPaymentPayload(required as never);
+    const payload = await client.createPaymentPayload(required as never);
+    return { payload, ...(gasfreeEstimate ? { gasfreeEstimate } : {}) };
   }
   throw new Error(`unsupported network ${selected.network}`);
 }

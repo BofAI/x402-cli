@@ -279,7 +279,66 @@ test("pay preserves settlement details from a failed paid response", async () =>
     assert.equal(parsed.ok, false);
     assert.equal(parsed.error.code, "HTTP_ERROR");
     assert.equal(parsed.error.details.status, 502);
+    assert.equal(parsed.error.details.paid, true);
+    assert.equal(parsed.error.details.settled, true);
+    assert.equal(parsed.error.details.delivered, false);
+    assert.equal(parsed.error.details.transaction, "settled-transaction");
     assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
+  });
+});
+
+test("GasFree fee limits are enforced before signing", async () => {
+  await withServer((_apiRequest, apiResponse) => {
+    apiResponse.writeHead(200, { "content-type": "application/json" });
+    apiResponse.end(JSON.stringify({
+      code: 200,
+      data: {
+        accountAddress: "TD3tTestAccount",
+        gasFreeAddress: "TNyzTestGasFree",
+        active: true,
+        nonce: 1,
+        allowSubmit: true,
+        assets: [{
+          tokenAddress: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          tokenSymbol: "USDT",
+          activateFee: "0",
+          transferFee: "500000",
+          decimal: 6,
+          frozen: 0,
+        }],
+      },
+    }));
+  }, async gasfreeApi => {
+    await withServer((request, response) => {
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://${request.headers.host}/pay` },
+        accepts: [{
+          scheme: "exact_gasfree",
+          network: "tron:0xcd8690dc",
+          amount: "1",
+          asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+          maxTimeoutSeconds: 300,
+          extra: {},
+        }],
+      };
+      response.writeHead(402, {
+        "content-type": "application/json",
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+      });
+      response.end(JSON.stringify(challenge));
+    }, async gateway => {
+      const result = await runAsync([
+        "pay", `${gateway}/pay`, "--json",
+        "--private-key", `0x${"01".repeat(32)}`,
+        "--gasfree-api-url", gasfreeApi,
+        "--max-gasfree-fee-raw", "499999",
+      ]);
+      assert.equal(result.status, 1, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.match(parsed.error.message, /estimated GasFree fee 500000 exceeds/);
+    });
   });
 });
 
