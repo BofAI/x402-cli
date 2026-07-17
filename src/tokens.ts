@@ -124,7 +124,7 @@ export function assertRawAmount(value: string, name = "raw amount"): string {
 }
 
 export function toSmallestUnit(amount: string, decimals: number): string {
-  if (!Number.isInteger(decimals) || decimals < 0) throw new Error("token decimals must be a non-negative integer");
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("token decimals must be an integer between 0 and 255");
   if (!/^\d+(\.\d+)?$/.test(amount)) throw new Error("amount must be a non-negative decimal string");
   const [whole, fraction = ""] = amount.split(".");
   if (fraction.length > decimals) throw new Error(`amount has more than ${decimals} decimal places`);

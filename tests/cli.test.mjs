@@ -263,7 +263,7 @@ test("pay preserves settlement details from a failed paid response", async () =>
       });
       return response.end(JSON.stringify(challenge));
     }
-    const settlement = { success: true, transaction: "settled-transaction" };
+    const settlement = { success: true, transaction: "settled-transaction", network: "eip155:97" };
     response.writeHead(502, {
       "content-type": "application/json",
       "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(settlement)).toString("base64"),

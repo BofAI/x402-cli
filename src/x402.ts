@@ -136,7 +136,7 @@ function evmRpcUrl(network: string, explicit?: string): string | undefined {
   );
 }
 
-async function createTronWallet(privateKey: `0x${string}`) {
+async function createTronWallet(privateKey: `0x${string}`, maxGasfreeFeeRaw?: string) {
   const rawKey = privateKey.replace(/^0x/, "");
   const tronWeb = new TronWeb({ fullHost: "https://api.trongrid.io" });
   const address = TronWeb.address.fromPrivateKey(rawKey);
@@ -144,6 +144,12 @@ async function createTronWallet(privateKey: `0x${string}`) {
   return {
     getAddress: () => address,
     async signTypedData(args: any) {
+      if (maxGasfreeFeeRaw !== undefined && args?.primaryType === "PermitTransfer") {
+        const maxFee = BigInt(args?.message?.maxFee ?? -1);
+        if (maxFee < 0n || maxFee > BigInt(maxGasfreeFeeRaw)) {
+          throw new Error(`final GasFree maxFee ${maxFee} exceeds --max-gasfree-fee limit ${maxGasfreeFeeRaw}`);
+        }
+      }
       const signature = await signTronTypedData(tronWeb, args, rawKey);
       return signature.startsWith("0x") ? signature : `0x${signature}`;
     },
@@ -196,7 +202,7 @@ export async function createPaymentPayload(args: {
       args.privateKey,
       ["tron_client", "payer", "default"],
     );
-    const wallet = await createTronWallet(privateKey);
+    const wallet = await createTronWallet(privateKey, selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined);
     const signer = await createClientTronSigner(wallet, {
       network: selected.network,
       rpcUrl: args.rpcUrl || process.env.TRON_RPC_URL,

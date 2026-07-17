@@ -15,6 +15,7 @@ type ParsedOptions = Record<string, string | boolean | string[]>;
 type OutputMode = "human" | "json";
 type FriendlyError = { code: string; message: string; hint: string; details?: unknown };
 const BOOLEAN_FLAGS = new Set(["daemon", "dry-run", "force", "help", "human", "include-blocked", "json", "raw", "version"]);
+const MAX_HTTP_BODY_BYTES = 10 * 1024 * 1024;
 const require = createRequire(import.meta.url);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const CATALOG_UPDATE_RETRIES = 3;
@@ -72,7 +73,7 @@ function parseArgs(argv: string[]): { command: string; positional: string[]; opt
     } else if (BOOLEAN_FLAGS.has(key)) {
       options[key] = true;
     } else if (!next || next.startsWith("--")) {
-      options[key] = true;
+      throw new CliError("MISSING_ARGUMENT", `--${key} requires a value`, `Pass --${key} <value>.`, 2);
     } else {
       if (key === "header") {
         const current = options[key];
@@ -680,7 +681,32 @@ async function readText(source: string, options?: ParsedOptions): Promise<string
   }
   const response = await fetchWithTimeout(source, {}, timeoutMs(options), `fetch ${source}`);
   if (!response.ok) throw new Error(`failed to fetch ${source}: ${response.status}`);
-  return response.text();
+  return readBoundedText(response, `response from ${source}`);
+}
+
+async function readBoundedText(response: Response, label: string): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_HTTP_BODY_BYTES) {
+    throw new Error(`${label} exceeds ${MAX_HTTP_BODY_BYTES} byte limit`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_HTTP_BODY_BYTES) {
+      await reader.cancel();
+      throw new Error(`${label} exceeds ${MAX_HTTP_BODY_BYTES} byte limit`);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
 }
 
 async function readJson(source: string, options?: ParsedOptions): Promise<any> {
@@ -693,7 +719,7 @@ function writeJson(file: string, value: unknown): void {
 }
 
 async function responsePayload(response: Response): Promise<unknown> {
-  const text = await response.text();
+  const text = await readBoundedText(response, "HTTP response");
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.toLowerCase().includes("json")) {
     try {
@@ -727,7 +753,7 @@ function cachedCatalogPath(): string {
 }
 
 function providerFilename(fqn: string): string {
-  return `${fqn.replace(/\//g, "__")}.json`;
+  return `${sanitizeProviderName(fqn).replace(/\//g, "__")}.json`;
 }
 
 function sanitizeProviderName(name: string): string {
@@ -792,7 +818,10 @@ function remoteBaseFromCatalogPayload(payload: Record<string, any>): string | un
 
 async function remoteBaseFromSource(source: string, payload?: Record<string, any>, options?: ParsedOptions): Promise<string | undefined> {
   const fromPayload = payload ? remoteBaseFromCatalogPayload(payload) : undefined;
-  if (fromPayload) return fromPayload;
+  if (fromPayload) {
+    if (/^https?:\/\//.test(source) && new URL(fromPayload).origin !== new URL(source).origin) throw new Error("catalog base_url must use the same origin as the catalog source");
+    return fromPayload;
+  }
   if (source.startsWith("http://") || source.startsWith("https://")) {
     return `${source.slice(0, source.lastIndexOf("/") + 1)}`;
   }
@@ -804,6 +833,7 @@ async function remoteBaseFromSource(source: string, payload?: Record<string, any
 }
 
 function catalogDetailSource(source: string, section: "providers" | "pay", name: string): string {
+  name = sanitizeProviderName(name);
   if (source.startsWith("http://") || source.startsWith("https://")) {
     const base = new URL(source);
     const pathname = base.pathname.endsWith("/catalog.json")
@@ -1035,20 +1065,24 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   }
   if (!explicitAsset && !registryToken) throw new Error(`unknown token ${tokenSymbol} on ${network}`);
   const decimals = decimalsOption !== undefined ? Number(decimalsOption) : registryToken!.decimals;
-  if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
   const rawAmount = opt(options, "rawAmount") ?? opt(options, "raw-amount");
   const humanAmount = opt(options, "amount");
   if (rawAmount && humanAmount) throw new CliError("INVALID_ARGUMENT", "--amount and --raw-amount are mutually exclusive", "Pass either --amount or --raw-amount, not both.", 2);
   const amount = rawAmount ? assertRawAmount(rawAmount, "--raw-amount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
   const assetAddress = explicitAsset ?? registryToken!.address;
   const assetTransferMethod = registryToken?.assetTransferMethod ?? "permit2";
+  const maxTimeoutSeconds = Number(opt(options, "valid-for-seconds", "300"));
+  if (!Number.isInteger(maxTimeoutSeconds) || maxTimeoutSeconds <= 0 || maxTimeoutSeconds > 86400) {
+    throw new Error("--valid-for-seconds must be an integer between 1 and 86400");
+  }
   return {
     scheme,
     network,
     amount,
     asset: assetAddress,
     payTo: opt(options, "pay-to") ?? opt(options, "payTo") ?? "",
-    maxTimeoutSeconds: Number(opt(options, "valid-for-seconds", "300")),
+    maxTimeoutSeconds,
     extra: scheme === "exact" && assetTransferMethod ? { assetTransferMethod } : {},
   };
 }
@@ -1059,9 +1093,10 @@ async function facilitatorPost(baseUrl: string, path: string, body: unknown, opt
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   }, timeoutMs(options), `facilitator ${path}`);
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(`facilitator ${path} failed: ${response.status} ${text}`);
+  const text = await readBoundedText(response, `facilitator ${path} response`);
+  let data: unknown = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { throw new Error(`facilitator ${path} returned invalid JSON`); }
+  if (!response.ok) throw new Error(`facilitator ${path} failed with HTTP ${response.status}`);
   return data;
 }
 
@@ -1120,7 +1155,7 @@ function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptio
       throw new Error("cannot evaluate --max-amount for an unknown asset; pass --max-raw-amount or --decimals");
     }
     const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
-    if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
     if (BigInt(selected.amount) > BigInt(toSmallestUnit(maxAmount, decimals))) {
       throw new Error(`payment amount exceeds --max-amount ${maxAmount}`);
     }
@@ -1145,7 +1180,7 @@ function gasfreeFeeLimitRaw(selected: PaymentRequirement, options: ParsedOptions
     throw new Error("cannot evaluate --max-gasfree-fee for an unknown asset; pass --max-gasfree-fee-raw or --decimals");
   }
   const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
-  if (!Number.isInteger(decimals) || decimals < 0) throw new Error("--decimals must be a non-negative integer");
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
   return toSmallestUnit(maxHuman, decimals);
 }
 
@@ -1210,7 +1245,7 @@ async function serve(options: ParsedOptions): Promise<void> {
         paymentPayload: payload,
         paymentRequirements: requirement,
       }, options);
-      if (!(settle?.success === true || settle?.settled === true || typeof settle?.transaction === "string" || typeof settle?.txHash === "string")) {
+      if (!(settle?.success === true && typeof settle?.transaction === "string" && settle.transaction.length > 0 && typeof settle?.network === "string" && settle.network.length > 0)) {
         response.writeHead(502, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "settlement failed" }));
         return;
@@ -1219,7 +1254,7 @@ async function serve(options: ParsedOptions): Promise<void> {
         "content-type": "application/json",
         [headers.response]: encodeResponse(settle),
       });
-      response.end(JSON.stringify({ success: true, network: requirement.network, scheme: requirement.scheme, transaction: settle.transaction ?? settle.txHash ?? null }));
+      response.end(JSON.stringify({ success: true, network: requirement.network, scheme: requirement.scheme, transaction: settle.transaction }));
     } catch (error) {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
@@ -1246,6 +1281,13 @@ function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions
   const scheme = opt(options, "scheme");
   const token = opt(options, "token");
   const selected = accepts.find(req => {
+    if (!req || !["exact", "exact_gasfree"].includes(req.scheme) || typeof req.network !== "string" || typeof req.asset !== "string") return false;
+    if (req.scheme === "exact_gasfree" && !req.network.startsWith("tron:")) return false;
+    try {
+      if (!findTokenByAddress(req.network, req.asset)) return false;
+    } catch {
+      return false;
+    }
     if (network && normalizeNetwork(network) !== req.network) return false;
     if (scheme && scheme !== req.scheme) return false;
     if (token) {
@@ -1266,6 +1308,9 @@ function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions
 async function pay(url: string, options: ParsedOptions): Promise<void> {
   requireArgument(url, "URL", "x402-cli pay <url> [options]");
   const method = opt(options, "method", "GET")!;
+  if (!/^[A-Z]+$/.test(method) || !["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"].includes(method)) {
+    throw new CliError("INVALID_ARGUMENT", `unsupported HTTP method ${method}`, "Use an uppercase standard HTTP method.", 2);
+  }
   const baseHeaders = requestHeaders(options);
   const probe = await fetchWithTimeout(url, {
     method,
@@ -1336,7 +1381,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   const body = await responsePayload(paid);
   const paymentResponse = paid.headers.get(headers.response);
   const settlement = paymentResponse ? decodeResponse(paymentResponse) : undefined;
-  const settled = settlement !== undefined;
+  const settled = settlement?.success === true && typeof settlement?.transaction === "string" && settlement.transaction.length > 0 && typeof settlement?.network === "string" && settlement.network.length > 0;
   const result = {
     url,
     status: paid.status,
@@ -1350,6 +1395,9 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     } : {}),
     ...(creation.gasfreeEstimate ? { gasfreeEstimate: creation.gasfreeEstimate } : {}),
   };
+  if (paymentResponse && !settled) {
+    throw new CliError("INVALID_SETTLEMENT", "gateway returned an invalid or unsuccessful PAYMENT-RESPONSE", "Do not treat this request as paid; contact the gateway operator.", 1, result);
+  }
   if (!paid.ok) {
     const retryAfter = paid.headers.get("retry-after");
     throw new CliError(
