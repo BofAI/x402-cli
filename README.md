@@ -16,7 +16,7 @@ from the payment token, so the payer does not need TRX.
 Install the CLI package:
 
 ```bash
-npm install -g @bankofai/x402-cli
+npm install -g @bankofai/x402-cli@beta
 x402-cli --version
 ```
 
@@ -58,7 +58,7 @@ envelope with `ok`, `command`, `result`, or structured `error` fields.
 Start a local x402 paywall endpoint:
 
 ```bash
-node dist/cli.js serve \
+x402-cli serve \
   --pay-to <recipient> \
   --amount 0.0001 \
   --network tron:0xcd8690dc \
@@ -79,7 +79,7 @@ Pay an x402-protected URL:
 
 ```bash
 TRON_PRIVATE_KEY=<hex> \
-node dist/cli.js pay http://127.0.0.1:4020/pay \
+x402-cli pay http://127.0.0.1:4020/pay \
   --network tron:0xcd8690dc \
   --token USDT
 ```
@@ -92,7 +92,7 @@ the server challenge):
 
 ```bash
 TRON_PRIVATE_KEY=<hex> \
-node dist/cli.js pay https://api.example.com/pay \
+x402-cli pay https://api.example.com/pay \
   --network tron:0xcd8690dc \
   --token USDT \
   --scheme exact_gasfree
@@ -133,7 +133,7 @@ Start a temporary local server and immediately pay it:
 
 ```bash
 TRON_PRIVATE_KEY=<hex> \
-node dist/cli.js roundtrip \
+x402-cli roundtrip \
   --pay-to <recipient> \
   --amount 0.0001 \
   --network tron:0xcd8690dc \
