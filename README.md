@@ -3,9 +3,9 @@
 TypeScript command-line client for BankofAI x402 payments. This version uses
 the npm TypeScript SDK packages only:
 
-- `@bankofai/x402-core@1.0.1-beta.4`
-- `@bankofai/x402-evm@1.0.1-beta.4`
-- `@bankofai/x402-tron@1.0.1-beta.4`
+- `@bankofai/x402-core@1.0.1`
+- `@bankofai/x402-evm@1.0.1`
+- `@bankofai/x402-tron@1.0.1`
 
 Stablecoin payments support `scheme=exact` and TRON `scheme=exact_gasfree`.
 The GasFree flow lets the relayer pay network energy while deducting its fee
