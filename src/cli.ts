@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1114,7 +1115,23 @@ function stripFlag(argv: string[], flag: string): string[] {
   return argv.filter(item => item !== flag);
 }
 
-function serveDaemon(argv: string[], options: ParsedOptions): void {
+async function waitForPort(host: string, port: number, timeout = 5_000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const connected = await new Promise<boolean>(resolve => {
+      const socket = net.createConnection({ host, port });
+      socket.setTimeout(250);
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("error", () => resolve(false));
+      socket.once("timeout", () => { socket.destroy(); resolve(false); });
+    });
+    if (connected) return;
+    await delay(50);
+  }
+  throw new Error(`daemon did not become ready on ${host}:${port}`);
+}
+
+async function serveDaemon(argv: string[], options: ParsedOptions): Promise<void> {
   const requirement = buildRequirement(options);
   if (!requirement.payTo) throw new Error("--pay-to is required");
   const daemonArgs = stripFlag(stripFlag(argv, "--daemon"), "-d");
@@ -1128,6 +1145,14 @@ function serveDaemon(argv: string[], options: ParsedOptions): void {
   const host = opt(options, "host", "127.0.0.1")!;
   const port = Number(opt(options, "port", "4020"));
   const resourceUrl = opt(options, "resource-url", `http://${host}:${port}/pay`)!;
+  try {
+    await waitForPort(host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host, port);
+  } catch (error) {
+    if (child.pid) {
+      try { process.kill(child.pid); } catch { /* child already exited */ }
+    }
+    throw error;
+  }
   emit({
     command: "server",
     mode: outputMode(options),
@@ -1757,7 +1782,7 @@ async function catalogPayJson(source: string, name: string, options: ParsedOptio
 
 async function handleGateway(args: string[]): Promise<void> {
   const { command, positional, options } = parseArgs(args);
-  if (hasFlag(options, "help") || command === "help") {
+  if (hasFlag(options, "help") || ["help", "--help", "-h"].includes(command)) {
     process.stdout.write(helpText(command === "catalog" || positional[0] === "catalog" ? "gateway-catalog" : "gateway"));
     return;
   }
@@ -1781,7 +1806,7 @@ async function handleGatewayCatalog(positional: string[], options: ParsedOptions
 
 async function handleCatalog(args: string[]): Promise<void> {
   const { command, positional, options } = parseArgs(args);
-  if (hasFlag(options, "help") || command === "help") {
+  if (hasFlag(options, "help") || ["help", "--help", "-h"].includes(command)) {
     const topic = command === "help" ? positional[0] : command;
     process.stdout.write(helpText(topic ? `catalog-${topic}` : "catalog"));
     return;
@@ -1818,7 +1843,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "serve") {
-    if (hasFlag(options, "daemon")) serveDaemon(argv, options);
+    if (hasFlag(options, "daemon")) await serveDaemon(argv, options);
     else await serve(options);
   }
   else if (command === "pay") await pay(positional[0], options);

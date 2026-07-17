@@ -13,6 +13,7 @@
     "bundle:gateway": "node scripts/bundle-gateway.mjs",
     "prepack": "npm run build && npm run bundle:gateway",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts"
   },
