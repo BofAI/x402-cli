@@ -1,6 +1,6 @@
 {
   "name": "@bankofai/x402-cli",
-  "version": "1.0.1-beta.10",
+  "version": "1.0.1",
   "type": "module",
   "files": [
     "dist"
@@ -24,7 +24,7 @@
   "dependencies": {
     "@bankofai/x402-core": "1.0.1",
     "@bankofai/x402-evm": "1.0.1",
-    "@bankofai/x402-gateway": "1.0.1-beta.10",
+    "@bankofai/x402-gateway": "1.0.1",
     "@bankofai/x402-tron": "1.0.1",
     "tronweb": "6.4.0",
     "viem": "^2.55.0"

@@ -16,7 +16,7 @@ from the payment token, so the payer does not need TRX.
 Install the CLI package:
 
 ```bash
-npm install -g @bankofai/x402-cli@beta
+npm install -g @bankofai/x402-cli@1.0.1
 x402-cli --version
 ```
 
