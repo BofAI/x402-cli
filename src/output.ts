@@ -57,3 +57,12 @@ export function classify(error: unknown): FriendlyError {
   if (lower.includes(" is required") || lower.includes("must be") || lower.includes("invalid --") || lower.includes("mutually exclusive")) return { code: lower.includes("required") ? "MISSING_ARGUMENT" : "INVALID_ARGUMENT", message, hint: "Run the command with --help to see valid usage and options." };
   return { code: "IO_ERROR", message, hint: "Run with --json for structured output, and check the provider/gateway logs for details." };
 }
+
+export async function withSdkStdoutRedirect<T>(enabled: boolean, fn: () => Promise<T>): Promise<T> {
+  if (!enabled) return fn();
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    process.stderr.write(`${args.map(arg => typeof arg === "string" ? arg : JSON.stringify(arg, null, 2)).join(" ")}\n`);
+  };
+  try { return await fn(); } finally { console.log = originalLog; }
+}
