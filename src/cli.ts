@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
-import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +13,7 @@ import { CliError, hasFlag, opt, optAll, outputMode, parseArgs, requireArgument,
 import { classify, emit, printJson } from "./output.js";
 import { fetchWithTimeout, positiveIntegerOption, readBoundedText, readJson, readText, responsePayload, timeoutMs } from "./http-client.js";
 import { loadProviderFile, providerAssetTransferMethod, providerCatalog, providerFiles, providerPrice, providerScheme, validateProvider } from "./provider-config.js";
+import { startServeDaemon } from "./daemon.js";
 
 const require = createRequire(import.meta.url);
 const CATALOG_UPDATE_RETRIES = 3;
@@ -645,62 +645,6 @@ function requestHeaders(options: ParsedOptions): Headers {
     headersOut.set(header.slice(0, idx).trim(), header.slice(idx + 1).trim());
   }
   return headersOut;
-}
-
-function stripFlag(argv: string[], flag: string): string[] {
-  return argv.filter(item => item !== flag);
-}
-
-async function waitForPort(host: string, port: number, timeout = 5_000): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const connected = await new Promise<boolean>(resolve => {
-      const socket = net.createConnection({ host, port });
-      socket.setTimeout(250);
-      socket.once("connect", () => { socket.destroy(); resolve(true); });
-      socket.once("error", () => resolve(false));
-      socket.once("timeout", () => { socket.destroy(); resolve(false); });
-    });
-    if (connected) return;
-    await delay(50);
-  }
-  throw new Error(`daemon did not become ready on ${host}:${port}`);
-}
-
-async function serveDaemon(argv: string[], options: ParsedOptions): Promise<void> {
-  const requirement = buildRequirement(options);
-  if (!requirement.payTo) throw new Error("--pay-to is required");
-  const daemonArgs = stripFlag(stripFlag(argv, "--daemon"), "-d");
-  const script = fileURLToPath(import.meta.url);
-  const child = spawn(process.execPath, [script, ...daemonArgs], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
-  const host = opt(options, "host", "127.0.0.1")!;
-  const port = Number(opt(options, "port", "4020"));
-  const resourceUrl = opt(options, "resource-url", `http://${host}:${port}/pay`)!;
-  try {
-    await waitForPort(host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host, port);
-  } catch (error) {
-    if (child.pid) {
-      try { process.kill(child.pid); } catch { /* child already exited */ }
-    }
-    throw error;
-  }
-  emit({
-    command: "server",
-    mode: outputMode(options),
-    network: requirement.network,
-    scheme: requirement.scheme,
-    result: {
-      pid: child.pid,
-      pay_url: resourceUrl,
-      resource_url: resourceUrl,
-      daemon: true,
-    },
-  });
 }
 
 function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptions): void {
@@ -1379,7 +1323,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "serve") {
-    if (hasFlag(options, "daemon")) await serveDaemon(argv, options);
+    if (hasFlag(options, "daemon")) await startServeDaemon(argv, options, buildRequirement(options), fileURLToPath(import.meta.url));
     else await serve(options);
   }
   else if (command === "pay") await pay(positional[0], options);
