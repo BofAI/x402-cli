@@ -1,6 +1,6 @@
 {
   "name": "@bankofai/x402-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "files": [
     "dist"
@@ -9,10 +9,12 @@
     "x402-cli": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "bundle:gateway": "node scripts/bundle-gateway.mjs",
     "prepack": "npm run build && npm run bundle:gateway",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts"
   },
@@ -20,17 +22,19 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@bankofai/x402-core": "1.0.0",
-    "@bankofai/x402-evm": "1.0.0",
-    "@bankofai/x402-gateway": "^1.0.0",
-    "@bankofai/x402-tron": "1.0.0",
+    "@bankofai/x402-core": "1.0.1",
+    "@bankofai/x402-evm": "1.0.1",
+    "@bankofai/x402-gateway": "1.0.1",
+    "@bankofai/x402-tron": "1.0.1",
     "tronweb": "6.4.0",
-    "viem": "^2.55.0",
-    "yaml": "^2.8.2"
+    "viem": "^2.55.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "ws": "8.21.0"
   }
 }

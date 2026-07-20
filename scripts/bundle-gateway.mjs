@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 
 function gatewayPackageDist() {
   try {
-    return path.dirname(require.resolve("@bankofai/x402-gateway/dist/cli.js"));
+    return path.join(path.dirname(require.resolve("@bankofai/x402-gateway/package.json")), "dist");
   } catch {
     return undefined;
   }
@@ -16,11 +16,11 @@ function gatewayPackageDist() {
 
 const source = process.env.X402_GATEWAY_DIST
   ? path.resolve(process.env.X402_GATEWAY_DIST)
-  : gatewayPackageDist() ?? path.resolve(root, "..", "x402-gateway", "dist");
+  : gatewayPackageDist();
 const target = path.join(root, "dist", "gateway");
 
-if (!fs.existsSync(path.join(source, "cli.js"))) {
-  throw new Error(`gateway dist not found at ${source}; install @bankofai/x402-gateway, run npm run build in x402-gateway, or set X402_GATEWAY_DIST`);
+if (!source || !fs.existsSync(path.join(source, "cli.js"))) {
+  throw new Error("gateway dist not found in @bankofai/x402-gateway; install dependencies or explicitly set X402_GATEWAY_DIST for development");
 }
 
 fs.rmSync(target, { recursive: true, force: true });

@@ -6,6 +6,7 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { signTronTypedData } from "../dist/x402.js";
+import { normalizeNetwork } from "../dist/tokens.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const cli = path.join(root, "dist", "cli.js");
@@ -63,7 +64,7 @@ function catalogFixture(dir) {
   const catalog = {
     version: 1,
     providers: [
-      { fqn: "alpha", title: "Alpha", category: "finance", featured_tags: ["defi"], chains: ["tron:nile"] },
+      { fqn: "alpha", title: "Alpha", category: "finance", featured_tags: ["defi"], chains: ["tron:0xcd8690dc"] },
       { fqn: "blocked", title: "Blocked", category: "security", block: true, featured_tags: ["defi"] },
     ],
   };
@@ -72,7 +73,7 @@ function catalogFixture(dir) {
     title: "Alpha Provider",
     category: "finance",
     service_url: "https://alpha.example",
-    chains: ["tron:nile"],
+    chains: ["tron:0xcd8690dc"],
     featured_tags: ["defi", "tvl"],
     endpoints: [
       {
@@ -80,7 +81,7 @@ function catalogFixture(dir) {
         path: "/protocols",
         url: "https://gateway.example/providers/alpha/protocols",
         description: "DeFi TVL endpoint",
-        paid: { network: "tron:nile", currency: "USDT", amount_raw: "1" },
+        paid: { network: "tron:0xcd8690dc", currency: "USDT", amount_raw: "1" },
       },
     ],
   };
@@ -101,6 +102,244 @@ test("help and version work", () => {
   const version = run(["--version"]);
   assert.equal(version.status, 0);
   assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+/);
+});
+
+test("legacy TRON aliases are rejected in favor of canonical CAIP-2 IDs", () => {
+  assert.throws(() => normalizeNetwork("tron:nile"), /use tron:0xcd8690dc/);
+  assert.throws(() => normalizeNetwork("tron-nile"), /use tron:0xcd8690dc/);
+  assert.throws(() => normalizeNetwork("tron:mainnet"), /use tron:0x2b6653dc/);
+  assert.throws(() => normalizeNetwork("tron:shasta"), /use tron:0x94a9059e/);
+});
+
+test("serve advertises exact_gasfree and rejects it on EVM", async () => {
+  const port = 47000 + Math.floor(Math.random() * 1000);
+  const started = run([
+    "serve",
+    "--pay-to", "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+    "--network", "tron:0xcd8690dc",
+    "--scheme", "exact_gasfree",
+    "--port", String(port),
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(started.status, 0, started.stderr);
+  const parsed = JSON.parse(started.stdout);
+  assert.equal(parsed.scheme, "exact_gasfree");
+  const pid = parsed.result.pid;
+  try {
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/pay`);
+        if (response.status !== 402) throw new Error(`unexpected status ${response.status}`);
+        const challenge = await response.json();
+        assert.equal(challenge.accepts[0].scheme, "exact_gasfree");
+        assert.deepEqual(challenge.accepts[0].extra, {});
+        break;
+      } catch (error) {
+        if (i === 19) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  } finally {
+    try {
+      process.kill(pid);
+    } catch {
+      // Process may already have exited.
+    }
+  }
+
+  const evm = run([
+    "serve",
+    "--pay-to", "0x0000000000000000000000000000000000000001",
+    "--network", "eip155:97",
+    "--scheme", "exact_gasfree",
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(evm.status, 1);
+  assert.match(evm.stdout, /supported only on TRON/);
+});
+
+test("pay dry-run preserves an exact_gasfree requirement", async () => {
+  await withServer((request, response) => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: `http://${request.headers.host}/pay` },
+      accepts: [{
+        scheme: "exact_gasfree",
+        network: "tron:0xcd8690dc",
+        amount: "1",
+        asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+        payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+      }],
+    };
+    response.writeHead(402, {
+      "content-type": "application/json",
+      "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    });
+    response.end(JSON.stringify(challenge));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--dry-run", "--scheme", "exact_gasfree", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.scheme, "exact_gasfree");
+    assert.equal(parsed.result.selected.scheme, "exact_gasfree");
+  });
+});
+
+test("pay skips unknown-network requirements when selecting a token", async () => {
+  await withServer((request, response) => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: `http://${request.headers.host}/pay` },
+      accepts: [
+        {
+          scheme: "exact",
+          network: "eip155:999999",
+          amount: "1",
+          asset: "0x0000000000000000000000000000000000000001",
+          payTo: "0x0000000000000000000000000000000000000002",
+        },
+        {
+          scheme: "exact_gasfree",
+          network: "tron:0xcd8690dc",
+          amount: "1",
+          asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+        },
+      ],
+    };
+    response.writeHead(402, {
+      "content-type": "application/json",
+      "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    });
+    response.end(JSON.stringify(challenge));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--dry-run", "--token", "USDT", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).result.selected.network, "tron:0xcd8690dc");
+  });
+});
+
+test("pay reports non-2xx gateway responses as failures", async () => {
+  await withServer((_request, response) => {
+    response.writeHead(429, {
+      "content-type": "application/json",
+      "retry-after": "36",
+    });
+    response.end(JSON.stringify({ error: "facilitator rate limited" }));
+  }, async base => {
+    const result = await runAsync(["pay", `${base}/pay`, "--json"]);
+    assert.equal(result.status, 1);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, "RATE_LIMITED");
+    assert.match(parsed.error.message, /HTTP 429/);
+    assert.match(parsed.error.message, /retry after 36s/);
+  });
+});
+
+test("pay preserves settlement details from a failed paid response", async () => {
+  let requests = 0;
+  await withServer((request, response) => {
+    requests += 1;
+    if (requests === 1) {
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://${request.headers.host}/pay` },
+        accepts: [{
+          scheme: "exact",
+          network: "eip155:97",
+          amount: "1",
+          asset: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+          payTo: "0x0000000000000000000000000000000000000001",
+          maxTimeoutSeconds: 300,
+          extra: { assetTransferMethod: "permit2" },
+        }],
+      };
+      response.writeHead(402, {
+        "content-type": "application/json",
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+      });
+      return response.end(JSON.stringify(challenge));
+    }
+    const settlement = { success: true, transaction: "settled-transaction", network: "eip155:97" };
+    response.writeHead(502, {
+      "content-type": "application/json",
+      "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(settlement)).toString("base64"),
+    });
+    response.end(JSON.stringify({ error: "upstream failed after payment settlement", settled: true }));
+  }, async base => {
+    const result = await runAsync([
+      "pay", `${base}/pay`, "--json",
+      "--private-key", `0x${"01".repeat(32)}`,
+    ]);
+    assert.equal(result.status, 1, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, "HTTP_ERROR");
+    assert.equal(parsed.error.details.status, 502);
+    assert.equal(parsed.error.details.paid, true);
+    assert.equal(parsed.error.details.settled, true);
+    assert.equal(parsed.error.details.delivered, false);
+    assert.equal(parsed.error.details.transaction, "settled-transaction");
+    assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
+  });
+});
+
+test("GasFree fee limits are enforced before signing", async () => {
+  await withServer((_apiRequest, apiResponse) => {
+    apiResponse.writeHead(200, { "content-type": "application/json" });
+    apiResponse.end(JSON.stringify({
+      code: 200,
+      data: {
+        accountAddress: "TD3tTestAccount",
+        gasFreeAddress: "TNyzTestGasFree",
+        active: true,
+        nonce: 1,
+        allowSubmit: true,
+        assets: [{
+          tokenAddress: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          tokenSymbol: "USDT",
+          activateFee: "0",
+          transferFee: "500000",
+          decimal: 6,
+          frozen: 0,
+        }],
+      },
+    }));
+  }, async gasfreeApi => {
+    await withServer((request, response) => {
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://${request.headers.host}/pay` },
+        accepts: [{
+          scheme: "exact_gasfree",
+          network: "tron:0xcd8690dc",
+          amount: "1",
+          asset: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+          payTo: "TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i",
+          maxTimeoutSeconds: 300,
+          extra: {},
+        }],
+      };
+      response.writeHead(402, {
+        "content-type": "application/json",
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+      });
+      response.end(JSON.stringify(challenge));
+    }, async gateway => {
+      const result = await runAsync([
+        "pay", `${gateway}/pay`, "--json",
+        "--private-key", `0x${"01".repeat(32)}`,
+        "--gasfree-api-url", gasfreeApi,
+        "--max-gasfree-fee-raw", "499999",
+      ]);
+      assert.equal(result.status, 1, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.match(parsed.error.message, /estimated GasFree fee 500000 exceeds/);
+    });
+  });
 });
 
 test("weighted catalog and gateway search support include-blocked and json output", () => {
@@ -301,7 +540,7 @@ test("catalog export-gateway writes public catalog and pay docs", async () => {
     subtitle: "Alpha subtitle",
     description: "Alpha description",
     category: "finance",
-    chains: ["tron:nile"],
+    chains: ["tron:0xcd8690dc"],
     endpoints: [{ method: "GET", path: "/v1", url: "https://gateway.example/v1", metered: true, min_price_usd: 0.1 }],
   };
   await withServer((request, response) => {
@@ -331,7 +570,7 @@ test("remote catalog detail and pay files use escaped FQN filenames", async () =
     const detail = {
       fqn: "bankofai/demo",
       title: "Demo Detail",
-      endpoints: [{ method: "GET", path: "/v1", paid: { network: "tron:nile" } }],
+      endpoints: [{ method: "GET", path: "/v1", paid: { network: "tron:0xcd8690dc" } }],
     };
     const payload =
       request.url === "/api/catalog.json" ? catalog :
@@ -450,7 +689,7 @@ test("gateway check validates provider files", () => {
     writeFileSync(providerFile, `name: fixture-provider
 forward_url: https://api.example.com
 operator:
-  network: tron-nile
+  network: tron:0xcd8690dc
   recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
   currencies:
     usd: ["USDT"]
@@ -479,7 +718,7 @@ test("gateway check fails on missing provider environment variables", () => {
     writeFileSync(providerFile, `name: env-provider
 forward_url: \${MISSING_X402_TEST_FORWARD_URL}
 operator:
-  network: tron-nile
+  network: tron:0xcd8690dc
   recipient: TTX1Us19zqsLXhY39PPR7KRUoMa93s3J3i
 endpoints:
   - method: GET
