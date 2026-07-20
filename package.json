@@ -1,6 +1,6 @@
 {
   "name": "@bankofai/x402-cli",
-  "version": "1.0.1-beta.9",
+  "version": "1.0.1-beta.10",
   "type": "module",
   "files": [
     "dist"
@@ -9,7 +9,8 @@
     "x402-cli": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "bundle:gateway": "node scripts/bundle-gateway.mjs",
     "prepack": "npm run build && npm run bundle:gateway",
     "test": "npm run build && node --test tests/*.test.mjs",
