@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
+const { version: expectedVersion } = JSON.parse(
+  readFileSync(path.join(root, "package.json"), "utf8"),
+);
 const temp = mkdtempSync(path.join(os.tmpdir(), "x402-cli-pack-"));
 try {
   const packOutput = execFileSync("npm", ["pack", "--json", "--silent"], { cwd: root, encoding: "utf8" });
@@ -16,7 +19,7 @@ try {
   execFileSync("npm", ["install", "--ignore-scripts", tarball], { cwd: temp, stdio: "ignore" });
   const cli = path.join(temp, "node_modules", ".bin", "x402-cli");
   const version = execFileSync(cli, ["--version"], { encoding: "utf8" }).trim();
-  assert.match(version, /^1\.0\.1-/);
+  assert.equal(version, expectedVersion);
   const gatewayHelp = execFileSync(cli, ["gateway", "--help"], { encoding: "utf8" });
   assert.match(gatewayHelp, /gateway/iu);
   rmSync(tarball, { force: true });
