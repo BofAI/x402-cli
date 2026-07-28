@@ -45,7 +45,7 @@ Options:
   --max-amount <amount>     Maximum human-readable payment amount
   --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
-  --private-key <hex>       Explicit payer private key (or PRIVATE_KEY/TRON_PRIVATE_KEY/EVM_PRIVATE_KEY)
+  --private-key <hex>       Override Agent Wallet for development/CI
   --rpc-url <url>           Explicit network RPC URL
   --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --json                    Print JSON envelope
@@ -53,6 +53,9 @@ Options:
 Examples:
   x402-cli pay https://api.example.com/paid --dry-run --json
   x402-cli pay https://api.example.com/paid --max-amount 0.01
+  x402-cli pay https://api.example.com/paid --network base-sepolia --token USDC
+
+By default, pay uses the active @bankofai/agent-wallet wallet for the selected network.
 `,
     serve: `Usage:
   x402-cli serve --pay-to <address> [options]
@@ -168,4 +171,3 @@ Options:
   };
   return sections[topic] ?? sections.root;
 }
-

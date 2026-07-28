@@ -6,7 +6,7 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { signTronTypedData } from "../dist/x402.js";
-import { normalizeNetwork } from "../dist/tokens.js";
+import { getToken, normalizeNetwork } from "../dist/tokens.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const cli = path.join(root, "dist", "cli.js");
@@ -109,6 +109,172 @@ test("legacy TRON aliases are rejected in favor of canonical CAIP-2 IDs", () => 
   assert.throws(() => normalizeNetwork("tron-nile"), /use tron:0xcd8690dc/);
   assert.throws(() => normalizeNetwork("tron:mainnet"), /use tron:0x2b6653dc/);
   assert.throws(() => normalizeNetwork("tron:shasta"), /use tron:0x94a9059e/);
+});
+
+test("Base aliases and USDC registry use canonical network data", () => {
+  assert.equal(normalizeNetwork("base-mainnet"), "eip155:8453");
+  assert.equal(normalizeNetwork("base-sepolia"), "eip155:84532");
+  assert.deepEqual(getToken("eip155:8453", "USDC"), {
+    address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    decimals: 6,
+    name: "USD Coin",
+    symbol: "USDC",
+    version: "2",
+  });
+  assert.deepEqual(getToken("base-sepolia", "usdc"), {
+    address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    decimals: 6,
+    name: "USDC",
+    symbol: "USDC",
+    version: "2",
+  });
+});
+
+test("pay dry-run selects Base Sepolia USDC", async () => {
+  await withServer((request, response) => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: `http://${request.headers.host}/pay` },
+      accepts: [{
+        scheme: "exact",
+        network: "eip155:84532",
+        amount: "1000",
+        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        payTo: "0x0000000000000000000000000000000000000001",
+        maxTimeoutSeconds: 300,
+      }],
+    };
+    response.writeHead(402, {
+      "content-type": "application/json",
+      "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    });
+    response.end(JSON.stringify(challenge));
+  }, async base => {
+    const result = await runAsync([
+      "pay", `${base}/pay`, "--dry-run", "--network", "base-sepolia", "--token", "USDC", "--json",
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.network, "eip155:84532");
+    assert.equal(parsed.result.selected.amount, "1000");
+  });
+});
+
+test("pay uses the active Agent Wallet by default", async () => {
+  const walletDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-agent-wallet-"));
+  const privateKey = `0x${"01".repeat(32)}`;
+  writeJson(path.join(walletDir, "wallets_config.json"), {
+    active_wallet: "base-payer",
+    wallets: {
+      "base-payer": {
+        type: "raw_secret",
+        params: { source: "private_key", private_key: privateKey },
+      },
+    },
+  });
+
+  let requests = 0;
+  let paymentSignature;
+  try {
+    await withServer((request, response) => {
+      requests += 1;
+      if (requests === 1) {
+        const challenge = {
+          x402Version: 2,
+          resource: { url: `http://${request.headers.host}/pay` },
+          accepts: [{
+            scheme: "exact",
+            network: "eip155:84532",
+            amount: "1",
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            payTo: "0x0000000000000000000000000000000000000001",
+            maxTimeoutSeconds: 300,
+            extra: { name: "USDC", version: "2" },
+          }],
+        };
+        response.writeHead(402, {
+          "content-type": "application/json",
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+        });
+        return response.end(JSON.stringify(challenge));
+      }
+
+      paymentSignature = request.headers["payment-signature"];
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "PAYMENT-RESPONSE": Buffer.from(JSON.stringify({
+          success: true,
+          transaction: "agent-wallet-test",
+          network: "eip155:84532",
+        })).toString("base64"),
+      });
+      response.end(JSON.stringify({ ok: true }));
+    }, async base => {
+      const result = await runAsync(
+        ["pay", `${base}/pay`, "--network", "base-sepolia", "--token", "USDC", "--json"],
+        {
+          env: {
+            AGENT_WALLET_DIR: walletDir,
+            AGENT_WALLET_ID: undefined,
+            AGENT_WALLET_PRIVATE_KEY: undefined,
+            EVM_PRIVATE_KEY: undefined,
+            PRIVATE_KEY: undefined,
+          },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.result.paid, true);
+      assert.equal(parsed.result.transaction, "agent-wallet-test");
+    });
+
+    assert.equal(requests, 2);
+    assert.equal(typeof paymentSignature, "string");
+    const payload = JSON.parse(Buffer.from(paymentSignature, "base64").toString("utf8"));
+    assert.match(payload.payload.signature, /^0x[0-9a-f]{130}$/i);
+  } finally {
+    rmSync(walletDir, { recursive: true, force: true });
+  }
+});
+
+test("serve advertises Base USDC exact with EIP-712 domain metadata", async () => {
+  const port = 48000 + Math.floor(Math.random() * 1000);
+  const started = run([
+    "serve",
+    "--pay-to", "0x0000000000000000000000000000000000000001",
+    "--amount", "0.001",
+    "--network", "base-sepolia",
+    "--token", "USDC",
+    "--port", String(port),
+    "--daemon",
+    "--json",
+  ]);
+  assert.equal(started.status, 0, started.stderr);
+  const pid = JSON.parse(started.stdout).result.pid;
+  try {
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/pay`);
+        assert.equal(response.status, 402);
+        const required = JSON.parse(
+          Buffer.from(response.headers.get("payment-required"), "base64").toString("utf8"),
+        );
+        assert.equal(required.accepts[0].network, "eip155:84532");
+        assert.equal(required.accepts[0].asset, "0x036CbD53842c5426634e7929541eC2318f3dCF7e");
+        assert.deepEqual(required.accepts[0].extra, { name: "USDC", version: "2" });
+        break;
+      } catch (error) {
+        if (i === 19) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  } finally {
+    try {
+      process.kill(pid);
+    } catch {
+      // Daemon may already have exited.
+    }
+  }
 });
 
 test("serve advertises exact_gasfree and rejects it on EVM", async () => {
@@ -284,6 +450,7 @@ test("pay preserves settlement details from a failed paid response", async () =>
     assert.equal(parsed.error.details.delivered, false);
     assert.equal(parsed.error.details.transaction, "settled-transaction");
     assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
+    assert.equal(requests, 2);
   });
 });
 

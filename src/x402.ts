@@ -7,6 +7,7 @@ import {
   encodePaymentSignatureHeader,
 } from "@bankofai/x402-core/http";
 import { x402Client } from "@bankofai/x402-core/client";
+import { resolveWallet, type Eip712Capable, type Wallet } from "@bankofai/agent-wallet";
 import { ExactEvmScheme, toClientEvmSigner } from "@bankofai/x402-evm";
 import { ExactTronScheme, createClientTronSigner } from "@bankofai/x402-tron";
 import { ExactGasFreeTronScheme, createGasFreeApiClients, getGasFreeApiBaseUrl } from "@bankofai/x402-tron/gasfree";
@@ -14,9 +15,6 @@ import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TronWeb } from "tronweb";
 import { findTokenByAddress } from "./tokens.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 export type PaymentRequirement = {
   scheme: string;
@@ -89,39 +87,30 @@ function normalizePrivateKey(value: string | undefined): `0x${string}` | undefin
   return (trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`) as `0x${string}`;
 }
 
-function privateKeyFromAgentWallet(walletIds: string[]): `0x${string}` | undefined {
-  const configPath = process.env.AGENT_WALLET_CONFIG ||
-    path.join(process.env.AGENT_WALLET_DIR || path.join(os.homedir(), ".agent-wallet"), "wallets_config.json");
-  if (!fs.existsSync(configPath)) return undefined;
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const wallets = config.wallets ?? {};
-    const ids = [
-      process.env.AGENT_WALLET_ID,
-      config.activeWalletId,
-      ...walletIds,
-      ...Object.keys(wallets),
-    ].filter(Boolean);
-    for (const id of ids) {
-      const wallet = wallets[String(id)];
-      const key = wallet?.params?.private_key ?? wallet?.material?.private_key ?? wallet?.private_key;
-      const normalized = normalizePrivateKey(key);
-      if (normalized) return normalized;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
-
-function privateKeyFrom(names: string[], explicit: string | undefined, walletIds: string[]): `0x${string}` {
+function explicitPrivateKey(names: string[], explicit: string | undefined): `0x${string}` | undefined {
   for (const value of [explicit, ...names.map(name => process.env[name])]) {
     const normalized = normalizePrivateKey(value);
     if (normalized) return normalized;
   }
-  const walletKey = privateKeyFromAgentWallet(walletIds);
-  if (walletKey) return walletKey;
-  throw new Error(`missing private key; set one of ${names.join(", ")}`);
+  return undefined;
+}
+
+type SigningWallet = Wallet & Eip712Capable;
+
+async function activeAgentWallet(network: string): Promise<SigningWallet> {
+  const wallet = await resolveWallet({
+    network,
+    ...(process.env.AGENT_WALLET_DIR ? { dir: process.env.AGENT_WALLET_DIR } : {}),
+    ...(process.env.AGENT_WALLET_ID ? { walletId: process.env.AGENT_WALLET_ID } : {}),
+  });
+  if (!("signTypedData" in wallet) || typeof wallet.signTypedData !== "function") {
+    throw new Error(`active agent-wallet for ${network} does not support typed-data signing`);
+  }
+  return wallet as SigningWallet;
+}
+
+function prefixedHex(value: string): `0x${string}` {
+  return (value.startsWith("0x") ? value : `0x${value}`) as `0x${string}`;
 }
 
 function evmRpcUrl(network: string, explicit?: string): string | undefined {
@@ -131,6 +120,8 @@ function evmRpcUrl(network: string, explicit?: string): string | undefined {
     process.env[`EVM_RPC_URL_${chainId}`] ||
     process.env.RPC_URL ||
     process.env.EVM_RPC_URL ||
+    (chainId === "8453" ? "https://mainnet.base.org" : undefined) ||
+    (chainId === "84532" ? "https://sepolia.base.org" : undefined) ||
     (chainId === "56" ? "https://bsc-dataseed.binance.org" : undefined) ||
     (chainId === "97" ? "https://data-seed-prebsc-1-s1.binance.org:8545" : undefined)
   );
@@ -166,7 +157,7 @@ export async function signTronTypedData(tronWeb: Pick<TronWeb, "trx">, args: any
   return signer(args.domain, args.types, args.message, rawPrivateKey);
 }
 
-export async function createPaymentPayload(args: {
+export type CreatePaymentClientArgs = {
   selected: PaymentRequirement;
   resource: string;
   extensions?: Record<string, unknown>;
@@ -176,33 +167,39 @@ export async function createPaymentPayload(args: {
   allowanceMode?: string;
   gasfreeApiUrl?: string;
   maxGasfreeFeeRaw?: string;
-}): Promise<{ payload: unknown; gasfreeEstimate?: { fee: string; total: string } }> {
+};
+
+export async function createPaymentClient(
+  args: CreatePaymentClientArgs,
+): Promise<{ client: x402Client; gasfreeEstimate?: { fee: string; total: string } }> {
   const selected = ensurePermit2(args.selected);
-  const required = paymentRequired(selected, args.resource, args.extensions);
   if (selected.network.startsWith("eip155:")) {
     if (selected.scheme !== "exact") throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
-    const privateKey = privateKeyFrom(
-      ["EVM_PRIVATE_KEY", "AGENT_WALLET_PRIVATE_KEY", "PRIVATE_KEY"],
-      args.privateKey,
-      ["evm_client", "payer", "default"],
-    );
-    const account = privateKeyToAccount(privateKey);
+    const privateKey = explicitPrivateKey(["EVM_PRIVATE_KEY", "PRIVATE_KEY"], args.privateKey);
     const rpcUrl = evmRpcUrl(selected.network, args.rpcUrl);
     const publicClient = rpcUrl ? createPublicClient({ transport: http(rpcUrl) }) : undefined;
-    const signer = toClientEvmSigner(account, publicClient);
+    const signer = privateKey
+      ? toClientEvmSigner(privateKeyToAccount(privateKey), publicClient)
+      : toClientEvmSigner(await createAgentWalletEvmSigner(selected.network), publicClient);
     const scheme = new ExactEvmScheme(signer, rpcUrl ? { rpcUrl } : undefined);
-    const payload = await new x402Client()
-      .register(selected.network as `${string}:${string}`, scheme)
-      .createPaymentPayload(required as never);
-    return { payload };
+    const client = new x402Client().register(
+      selected.network as `${string}:${string}`,
+      scheme,
+    );
+    registerSelectedRequirementPolicy(client, selected);
+    return { client };
   }
   if (selected.network.startsWith("tron:")) {
-    const privateKey = privateKeyFrom(
-      ["TRON_PRIVATE_KEY", "AGENT_WALLET_PRIVATE_KEY", "PRIVATE_KEY"],
-      args.privateKey,
-      ["tron_client", "payer", "default"],
-    );
-    const wallet = await createTronWallet(privateKey, selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined);
+    const privateKey = explicitPrivateKey(["TRON_PRIVATE_KEY", "PRIVATE_KEY"], args.privateKey);
+    const wallet = privateKey
+      ? await createTronWallet(
+          privateKey,
+          selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined,
+        )
+      : withGasfreeFeeGuard(
+          await activeAgentWallet(selected.network),
+          selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined,
+        );
     const signer = await createClientTronSigner(wallet, {
       network: selected.network,
       rpcUrl: args.rpcUrl || process.env.TRON_RPC_URL,
@@ -229,8 +226,79 @@ export async function createPaymentPayload(args: {
     } else {
       throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
     }
-    const payload = await client.createPaymentPayload(required as never);
-    return { payload, ...(gasfreeEstimate ? { gasfreeEstimate } : {}) };
+    registerSelectedRequirementPolicy(client, selected);
+    return { client, ...(gasfreeEstimate ? { gasfreeEstimate } : {}) };
   }
   throw new Error(`unsupported network ${selected.network}`);
+}
+
+async function createAgentWalletEvmSigner(network: string) {
+  const wallet = await activeAgentWallet(network);
+  const address = await wallet.getAddress();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    throw new Error(`active agent-wallet address is not valid for ${network}: ${address}`);
+  }
+  return {
+    address: address as `0x${string}`,
+    async signTypedData(data: {
+      domain: Record<string, unknown>;
+      types: Record<string, unknown>;
+      primaryType: string;
+      message: Record<string, unknown>;
+    }) {
+      return prefixedHex(await wallet.signTypedData(data));
+    },
+    async signTransaction(transaction: Record<string, unknown>) {
+      return prefixedHex(await wallet.signTransaction(transaction));
+    },
+  };
+}
+
+function withGasfreeFeeGuard(wallet: SigningWallet, maxGasfreeFeeRaw?: string) {
+  return {
+    getAddress: () => wallet.getAddress(),
+    async signTypedData(args: {
+      domain: Record<string, unknown>;
+      types: Record<string, unknown>;
+      primaryType: string;
+      message: Record<string, unknown>;
+    }) {
+      if (maxGasfreeFeeRaw !== undefined && args.primaryType === "PermitTransfer") {
+        const maxFee = BigInt(args.message.maxFee as string | number | bigint ?? -1);
+        if (maxFee < 0n || maxFee > BigInt(maxGasfreeFeeRaw)) {
+          throw new Error(`final GasFree maxFee ${maxFee} exceeds --max-gasfree-fee limit ${maxGasfreeFeeRaw}`);
+        }
+      }
+      return prefixedHex(await wallet.signTypedData(args));
+    },
+    signTransaction: (transaction: Record<string, unknown>) => wallet.signTransaction(transaction),
+  };
+}
+
+function registerSelectedRequirementPolicy(client: x402Client, selected: PaymentRequirement): void {
+  client.registerPolicy((_version, requirements) =>
+    requirements.filter(requirement =>
+      requirement.scheme === selected.scheme &&
+      requirement.network === selected.network &&
+      requirement.asset.toLowerCase() === selected.asset.toLowerCase() &&
+      requirement.amount === selected.amount &&
+      requirement.payTo.toLowerCase() === selected.payTo.toLowerCase()
+    ),
+  );
+}
+
+export async function createPaymentPayload(
+  args: CreatePaymentClientArgs,
+): Promise<{ payload: unknown; gasfreeEstimate?: { fee: string; total: string } }> {
+  const creation = await createPaymentClient(args);
+  const required = paymentRequired(
+    ensurePermit2(args.selected),
+    args.resource,
+    args.extensions,
+  );
+  const payload = await creation.client.createPaymentPayload(required as never);
+  return {
+    payload,
+    ...(creation.gasfreeEstimate ? { gasfreeEstimate: creation.gasfreeEstimate } : {}),
+  };
 }

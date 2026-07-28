@@ -81,6 +81,24 @@ export const TOKENS: Record<string, Record<string, TokenInfo>> = {
       assetTransferMethod: "permit2",
     },
   },
+  "eip155:8453": {
+    USDC: {
+      address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      decimals: 6,
+      name: "USD Coin",
+      symbol: "USDC",
+      version: "2",
+    },
+  },
+  "eip155:84532": {
+    USDC: {
+      address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      decimals: 6,
+      name: "USDC",
+      symbol: "USDC",
+      version: "2",
+    },
+  },
 };
 
 export function normalizeNetwork(network: string): string {
@@ -102,6 +120,8 @@ export function normalizeNetwork(network: string): string {
   return {
     "bsc-mainnet": "eip155:56",
     "bsc-testnet": "eip155:97",
+    "base-mainnet": "eip155:8453",
+    "base-sepolia": "eip155:84532",
   }[network] ?? network;
 }
 

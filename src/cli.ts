@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import http from "node:http";
 import { fileURLToPath } from "node:url";
-import { createPaymentPayload, decodeRequired, decodeResponse, decodeSignature, encodeRequired, encodeResponse, encodeSignature, headers, PaymentRequirement } from "./x402.js";
+import { wrapFetchWithPayment } from "@bankofai/x402-fetch";
+import { createPaymentClient, decodeRequired, decodeResponse, decodeSignature, encodeRequired, encodeResponse, headers, PaymentRequirement } from "./x402.js";
 import { assertRawAmount, findTokenByAddress, getToken, normalizeNetwork, toSmallestUnit } from "./tokens.js";
 import { CliError, hasFlag, opt, optAll, outputMode, parseArgs, requireArgument, type ParsedOptions } from "./args.js";
 import { classify, emit, withSdkStdoutRedirect } from "./output.js";
@@ -28,6 +29,10 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
     throw new Error("When --asset is set without a registry match, --decimals must be provided");
   }
   if (!explicitAsset && !registryToken) throw new Error(`unknown token ${tokenSymbol} on ${network}`);
+  const isBase = network === "eip155:8453" || network === "eip155:84532";
+  if (isBase && !registryToken) {
+    throw new Error("Base support is currently limited to the official USDC contract");
+  }
   const decimals = decimalsOption !== undefined ? Number(decimalsOption) : registryToken!.decimals;
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
   const rawAmount = opt(options, "rawAmount") ?? opt(options, "raw-amount");
@@ -35,7 +40,16 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
   if (rawAmount && humanAmount) throw new CliError("INVALID_ARGUMENT", "--amount and --raw-amount are mutually exclusive", "Pass either --amount or --raw-amount, not both.", 2);
   const amount = rawAmount ? assertRawAmount(rawAmount, "--raw-amount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
   const assetAddress = explicitAsset ?? registryToken!.address;
-  const assetTransferMethod = registryToken?.assetTransferMethod ?? "permit2";
+  const assetTransferMethod =
+    registryToken?.assetTransferMethod ?? (isBase ? undefined : "permit2");
+  const extra =
+    scheme !== "exact"
+      ? {}
+      : assetTransferMethod
+        ? { assetTransferMethod }
+        : registryToken?.version
+          ? { name: registryToken.name, version: registryToken.version }
+          : {};
   const maxTimeoutSeconds = Number(opt(options, "valid-for-seconds", "300"));
   if (!Number.isInteger(maxTimeoutSeconds) || maxTimeoutSeconds <= 0 || maxTimeoutSeconds > 86400) {
     throw new Error("--valid-for-seconds must be an integer between 1 and 86400");
@@ -47,12 +61,14 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
     asset: assetAddress,
     payTo: opt(options, "pay-to") ?? opt(options, "payTo") ?? "",
     maxTimeoutSeconds,
-    extra: scheme === "exact" && assetTransferMethod ? { assetTransferMethod } : {},
+    extra,
   };
 }
 
 async function facilitatorPost(baseUrl: string, path: string, body: unknown, options: ParsedOptions): Promise<any> {
-  const response = await fetchWithTimeout(new URL(path, baseUrl), {
+  const base = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  const endpoint = new URL(path.replace(/^\/+/, ""), base);
+  const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -293,7 +309,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     return;
   }
   const creation = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
-    createPaymentPayload({
+    createPaymentClient({
       selected,
       resource: required.resource?.url ?? url,
       extensions: required.extensions,
@@ -303,13 +319,23 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       maxGasfreeFeeRaw,
     }),
   );
-  const retryHeaders = new Headers(baseHeaders);
-  retryHeaders.set(headers.signature, encodeSignature(creation.payload));
-  const paid = await fetchWithTimeout(url, {
-    method,
-    headers: retryHeaders,
-    body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
-  }, timeoutMs(options), `fetch ${url}`);
+  let cachedProbe: Response | undefined = probe;
+  const transport: typeof globalThis.fetch = async (input, init) => {
+    if (cachedProbe) {
+      const response = cachedProbe;
+      cachedProbe = undefined;
+      return response;
+    }
+    return fetchWithTimeout(input, init, timeoutMs(options), `fetch ${url}`);
+  };
+  const fetchWithPayment = wrapFetchWithPayment(transport, creation.client);
+  const paid = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
+    fetchWithPayment(url, {
+      method,
+      headers: baseHeaders,
+      body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
+    }),
+  );
   const body = await responsePayload(paid);
   const paymentResponse = paid.headers.get(headers.response);
   const settlement = paymentResponse ? decodeResponse(paymentResponse) : undefined;

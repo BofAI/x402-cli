@@ -16,7 +16,7 @@ export function timeoutMs(options?: ParsedOptions): number {
   return options ? positiveIntegerOption(options, "timeout-ms", DEFAULT_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
 }
 
-export async function fetchWithTimeout(input: string | URL, init: RequestInit = {}, timeout = DEFAULT_TIMEOUT_MS, label = "request"): Promise<Response> {
+export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeout = DEFAULT_TIMEOUT_MS, label = "request"): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {

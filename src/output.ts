@@ -40,7 +40,7 @@ export function classify(error: unknown): FriendlyError {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof CliError) return { code: error.code, message, hint: error.hint, details: error.details };
   const lower = message.toLowerCase();
-  if (lower.includes("missing private key") || lower.includes("could not find a wallet")) return { code: "WALLET_NOT_CONFIGURED", message, hint: "Set PRIVATE_KEY, TRON_PRIVATE_KEY, EVM_PRIVATE_KEY, or configure agent-wallet with a payer wallet." };
+  if (lower.includes("missing private key") || lower.includes("could not find a wallet") || lower.includes("wallet not found")) return { code: "WALLET_NOT_CONFIGURED", message, hint: "Configure an active Agent Wallet for this network. For development/CI, use --private-key or the chain-specific private-key environment variable." };
   if (lower.includes("wallets_config") || lower.includes("wallet config")) return { code: "WALLET_CONFIG_CORRUPT", message, hint: "Check ~/.agent-wallet/wallets_config.json or recreate the local agent-wallet configuration." };
   if (lower.includes("does not exist") && lower.includes("account [t")) return { code: "TRON_ACCOUNT_NOT_ACTIVATED", message, hint: "Activate the TRON address by sending it a small amount of TRX before signing contract calls." };
   if (lower.includes("permit2_insufficient_balance") || lower.includes("insufficient") && lower.includes("balance")) return { code: "INSUFFICIENT_TOKEN_BALANCE", message, hint: "Fund the payer address with the exact token and network advertised by the provider, then retry." };
@@ -61,8 +61,19 @@ export function classify(error: unknown): FriendlyError {
 export async function withSdkStdoutRedirect<T>(enabled: boolean, fn: () => Promise<T>): Promise<T> {
   if (!enabled) return fn();
   const originalLog = console.log;
-  console.log = (...args: unknown[]) => {
+  const originalInfo = console.info;
+  const originalDebug = console.debug;
+  const redirect = (...args: unknown[]) => {
     process.stderr.write(`${args.map(arg => typeof arg === "string" ? arg : JSON.stringify(arg, null, 2)).join(" ")}\n`);
   };
-  try { return await fn(); } finally { console.log = originalLog; }
+  console.log = redirect;
+  console.info = redirect;
+  console.debug = redirect;
+  try {
+    return await fn();
+  } finally {
+    console.log = originalLog;
+    console.info = originalInfo;
+    console.debug = originalDebug;
+  }
 }

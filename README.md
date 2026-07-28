@@ -5,6 +5,7 @@ the npm TypeScript SDK packages only:
 
 - `@bankofai/x402-core@1.0.1`
 - `@bankofai/x402-evm@1.0.1`
+- `@bankofai/x402-fetch@1.0.1`
 - `@bankofai/x402-tron@1.0.1`
 
 Stablecoin payments support `scheme=exact` and TRON `scheme=exact_gasfree`.
@@ -16,7 +17,7 @@ from the payment token, so the payer does not need TRX.
 Install the CLI package:
 
 ```bash
-npm install -g @bankofai/x402-cli@1.0.1
+npm install -g @bankofai/x402-cli@1.0.2
 x402-cli --version
 ```
 
@@ -119,9 +120,31 @@ completed) from `delivered` (HTTP business response succeeded). A settled
 upstream failure has `paid=true`, `settled=true`, and `delivered=false` and
 includes its transaction information.
 
-For EVM networks use `EVM_PRIVATE_KEY` or `PRIVATE_KEY`.
+By default, `x402-cli pay` resolves the active wallet from
+`@bankofai/agent-wallet` for the selected payment network and delegates signing
+to the wallet. The CLI does not read private keys from `wallets_config.json`.
+Use `AGENT_WALLET_DIR` to select a non-default Agent Wallet directory, or
+`AGENT_WALLET_ID` to explicitly select a configured wallet.
+
+For development and CI only, `--private-key`, `EVM_PRIVATE_KEY`,
+`TRON_PRIVATE_KEY`, or `PRIVATE_KEY` can explicitly override Agent Wallet.
 Prefer environment variables over `--private-key` in shared environments,
 because command-line arguments may be visible to other local processes.
+
+Pay a Base Sepolia USDC endpoint:
+
+```bash
+x402-cli pay https://api.example.com/pay \
+  --network base-sepolia \
+  --token USDC \
+  --max-amount 0.01 \
+  --rpc-url <production-rpc-url>
+```
+
+Base uses the x402 `exact` EVM flow with USDC EIP-3009 authorization. The
+built-in public RPC fallback is intended for development; production callers
+should supply `--rpc-url`, `EVM_RPC_URL_8453`/`EVM_RPC_URL_84532`, or
+`EVM_RPC_URL`.
 
 If the gateway settles a payment but the upstream request fails, JSON error
 output includes `error.details.paymentResponse` for reconciliation. Do not retry
@@ -149,6 +172,8 @@ Supported built-in token registry:
 - `tron:0x94a9059e` USDT
 - `eip155:56` USDT
 - `eip155:97` USDT, USDC
+- `eip155:8453` USDC
+- `eip155:84532` USDC
 
 Non-CAIP TRON aliases are rejected. Use the canonical TRON IDs above.
 
@@ -156,6 +181,8 @@ EVM convenience aliases accepted:
 
 - `bsc-mainnet` -> `eip155:56`
 - `bsc-testnet` -> `eip155:97`
+- `base-mainnet` -> `eip155:8453`
+- `base-sepolia` -> `eip155:84532`
 
 ## Facilitator
 
