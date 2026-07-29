@@ -14,7 +14,8 @@ import { ExactGasFreeTronScheme, createGasFreeApiClients, getGasFreeApiBaseUrl }
 import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { TronWeb } from "tronweb";
-import { findTokenByAddress } from "./tokens.js";
+import { CliError } from "./args.js";
+import { addressesEqual, findTokenByAddress } from "./tokens.js";
 
 export type PaymentRequirement = {
   scheme: string;
@@ -98,11 +99,33 @@ function explicitPrivateKey(names: string[], explicit: string | undefined): `0x$
 type SigningWallet = Wallet & Eip712Capable;
 
 async function activeAgentWallet(network: string): Promise<SigningWallet> {
-  const wallet = await resolveWallet({
-    network,
-    ...(process.env.AGENT_WALLET_DIR ? { dir: process.env.AGENT_WALLET_DIR } : {}),
-    ...(process.env.AGENT_WALLET_ID ? { walletId: process.env.AGENT_WALLET_ID } : {}),
-  });
+  let wallet: Wallet;
+  try {
+    wallet = await resolveWallet({
+      network,
+      ...(process.env.AGENT_WALLET_DIR ? { dir: process.env.AGENT_WALLET_DIR } : {}),
+      ...(process.env.AGENT_WALLET_ID ? { walletId: process.env.AGENT_WALLET_ID } : {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof SyntaxError || /wallets_config|wallet config/i.test(message)) {
+      throw new CliError(
+        "WALLET_CONFIG_CORRUPT",
+        message,
+        "Check the Agent Wallet configuration or recreate the wallet.",
+        1,
+      );
+    }
+    if (/password required/i.test(message)) {
+      throw new CliError(
+        "WALLET_PASSWORD_REQUIRED",
+        message,
+        "Provide the Agent Wallet password using its supported secure configuration.",
+        1,
+      );
+    }
+    throw error;
+  }
   if (!("signTypedData" in wallet) || typeof wallet.signTypedData !== "function") {
     throw new Error(`active agent-wallet for ${network} does not support typed-data signing`);
   }
@@ -280,9 +303,9 @@ function registerSelectedRequirementPolicy(client: x402Client, selected: Payment
     requirements.filter(requirement =>
       requirement.scheme === selected.scheme &&
       requirement.network === selected.network &&
-      requirement.asset.toLowerCase() === selected.asset.toLowerCase() &&
+      addressesEqual(requirement.network, requirement.asset, selected.asset) &&
       requirement.amount === selected.amount &&
-      requirement.payTo.toLowerCase() === selected.payTo.toLowerCase()
+      addressesEqual(requirement.network, requirement.payTo, selected.payTo)
     ),
   );
 }

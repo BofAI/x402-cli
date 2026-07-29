@@ -87,6 +87,9 @@ x402-cli pay http://127.0.0.1:4020/pay \
 
 For automated or unfamiliar endpoints, set `--max-amount` or
 `--max-raw-amount` before allowing the CLI to sign a payment.
+Registered token decimals are authoritative and cannot be overridden with
+`--decimals`. For an explicit unregistered non-Base asset, pass both `--asset`
+and `--decimals`.
 
 Pay a TRON GasFree endpoint (the CLI normally selects this automatically from
 the server challenge):
@@ -131,11 +134,11 @@ For development and CI only, `--private-key`, `EVM_PRIVATE_KEY`,
 Prefer environment variables over `--private-key` in shared environments,
 because command-line arguments may be visible to other local processes.
 
-Pay a Base Sepolia USDC endpoint:
+Pay a Base Mainnet USDC endpoint:
 
 ```bash
 x402-cli pay https://api.example.com/pay \
-  --network base-sepolia \
+  --network base-mainnet \
   --token USDC \
   --max-amount 0.01 \
   --rpc-url <production-rpc-url>
@@ -145,6 +148,10 @@ Base uses the x402 `exact` EVM flow with USDC EIP-3009 authorization. The
 built-in public RPC fallback is intended for development; production callers
 should supply `--rpc-url`, `EVM_RPC_URL_8453`/`EVM_RPC_URL_84532`, or
 `EVM_RPC_URL`.
+
+The probe and signed retry do not automatically follow HTTP redirects. If an
+endpoint redirects, inspect the destination and invoke the final trusted URL
+explicitly so `PAYMENT-SIGNATURE` is never forwarded to another origin.
 
 If the gateway settles a payment but the upstream request fails, JSON error
 output includes `error.details.paymentResponse` for reconciliation. Do not retry
@@ -162,6 +169,32 @@ x402-cli roundtrip \
   --network tron:0xcd8690dc \
   --token USDT
 ```
+
+With `--json`, roundtrip emits one JSON document containing separate `serve`
+and `pay` results.
+
+### Gateway and Catalog
+
+Inspect and validate local Gateway providers:
+
+```bash
+x402-cli gateway check ./providers --json
+x402-cli gateway catalog build ./providers --json
+x402-cli gateway catalog search "token price" --catalog ./dist/catalog.json --json
+```
+
+Search and cache a hosted or local Catalog:
+
+```bash
+x402-cli catalog search "Base USDC" --json
+x402-cli catalog update --catalog https://catalog.example/api/catalog.json --json
+x402-cli catalog show defillama --json
+x402-cli catalog endpoints defillama --json
+x402-cli catalog pay-json defillama --json
+```
+
+Use `x402-cli gateway --help`, `x402-cli gateway catalog --help`, and
+`x402-cli catalog <command> --help` for command-specific options.
 
 ## Networks
 

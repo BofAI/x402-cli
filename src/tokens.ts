@@ -1,3 +1,5 @@
+import { TronWeb } from "tronweb";
+
 export type TokenInfo = {
   address: string;
   decimals: number;
@@ -131,10 +133,33 @@ export function getToken(network: string, symbol: string): TokenInfo {
   return token;
 }
 
+export function normalizeAddress(network: string, address: string): string | undefined {
+  const canonicalNetwork = normalizeNetwork(network);
+  if (canonicalNetwork.startsWith("eip155:")) {
+    return /^0x[0-9a-fA-F]{40}$/.test(address) ? address.toLowerCase() : undefined;
+  }
+  if (canonicalNetwork.startsWith("tron:")) {
+    if (!TronWeb.isAddress(address)) return undefined;
+    try {
+      return TronWeb.address.toHex(address).toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+export function addressesEqual(network: string, left: string, right: string): boolean {
+  const normalizedLeft = normalizeAddress(network, left);
+  const normalizedRight = normalizeAddress(network, right);
+  return normalizedLeft !== undefined && normalizedLeft === normalizedRight;
+}
+
 export function findTokenByAddress(network: string, address: string): TokenInfo | undefined {
-  const lower = address.toLowerCase();
+  const normalized = normalizeAddress(network, address);
+  if (!normalized) return undefined;
   return Object.values(TOKENS[normalizeNetwork(network)] ?? {}).find(
-    token => token.address.toLowerCase() === lower,
+    token => normalizeAddress(network, token.address) === normalized,
   );
 }
 

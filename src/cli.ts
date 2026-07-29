@@ -3,42 +3,105 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { wrapFetchWithPayment } from "@bankofai/x402-fetch";
 import { createPaymentClient, decodeRequired, decodeResponse, decodeSignature, encodeRequired, encodeResponse, headers, PaymentRequirement } from "./x402.js";
-import { assertRawAmount, findTokenByAddress, getToken, normalizeNetwork, toSmallestUnit } from "./tokens.js";
+import { addressesEqual, assertRawAmount, findTokenByAddress, getToken, normalizeAddress, normalizeNetwork, toSmallestUnit, type TokenInfo } from "./tokens.js";
 import { CliError, hasFlag, opt, optAll, outputMode, parseArgs, requireArgument, type ParsedOptions } from "./args.js";
-import { classify, emit, withSdkStdoutRedirect } from "./output.js";
-import { fetchWithTimeout, readBoundedText, responsePayload, timeoutMs } from "./http-client.js";
+import { beginEmitCapture, classify, emit, setInvocationCommand, withSdkStdoutRedirect } from "./output.js";
+import { fetchWithTimeout, positiveIntegerOption, readBoundedText, responsePayload, timeoutMs } from "./http-client.js";
 import { startServeDaemon } from "./daemon.js";
 import { getVersion, helpText } from "./help.js";
 import { catalogBuild, catalogPayAssets, gatewayCheck, gatewayScaffold, gatewayStart } from "./gateway-commands.js";
 import { catalogSearch, defaultCatalogSource, handleCatalog } from "./catalog-commands.js";
 
+function invalidArgument(message: string, hint = "Run the command with --help to see valid options."): CliError {
+  return new CliError("INVALID_ARGUMENT", message, hint, 2);
+}
+
+function normalizeNetworkOption(value: string): string {
+  try {
+    return normalizeNetwork(value);
+  } catch (error) {
+    throw invalidArgument(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function resolveDecimals(token: TokenInfo | undefined, decimalsOption: string | undefined): number {
+  let supplied: number | undefined;
+  if (decimalsOption !== undefined) {
+    supplied = Number(decimalsOption);
+    if (!Number.isInteger(supplied) || supplied < 0 || supplied > 255) {
+      throw invalidArgument("--decimals must be an integer between 0 and 255");
+    }
+  }
+  if (token) {
+    if (supplied !== undefined && supplied !== token.decimals) {
+      throw invalidArgument(
+        `--decimals ${supplied} does not match registered ${token.symbol} decimals ${token.decimals}`,
+        "Remove --decimals or pass the registered token decimals.",
+      );
+    }
+    return token.decimals;
+  }
+  if (supplied === undefined) {
+    throw invalidArgument(
+      "an unregistered asset requires --decimals",
+      "Pass --decimals for the explicit --asset, or use a registered token.",
+    );
+  }
+  return supplied;
+}
+
+function rawAmountOption(value: string, name: string): string {
+  try {
+    return assertRawAmount(value, name);
+  } catch (error) {
+    throw invalidArgument(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function humanAmountOption(value: string, decimals: number, name: string): string {
+  try {
+    return toSmallestUnit(value, decimals);
+  } catch (error) {
+    throw invalidArgument(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function buildRequirement(options: ParsedOptions): PaymentRequirement {
-  const network = normalizeNetwork(opt(options, "network", "tron:0xcd8690dc")!);
+  const network = normalizeNetworkOption(opt(options, "network", "tron:0xcd8690dc")!);
   const scheme = opt(options, "scheme", "exact")!;
-  if (!["exact", "exact_gasfree"].includes(scheme)) throw new Error(`unsupported scheme ${scheme}`);
+  if (!["exact", "exact_gasfree"].includes(scheme)) throw invalidArgument(`unsupported scheme ${scheme}`);
   if (scheme === "exact_gasfree" && !network.startsWith("tron:")) {
-    throw new Error("exact_gasfree is supported only on TRON networks");
+    throw invalidArgument("exact_gasfree is supported only on TRON networks");
   }
   const tokenSymbol = opt(options, "token", "USDT")!;
   const explicitAsset = opt(options, "asset");
-  const registryToken = explicitAsset
-    ? findTokenByAddress(network, explicitAsset)
-    : getToken(network, tokenSymbol);
+  if (explicitAsset && !normalizeAddress(network, explicitAsset)) {
+    throw invalidArgument(`invalid --asset address for ${network}`);
+  }
+  let registryToken: TokenInfo | undefined;
+  try {
+    registryToken = explicitAsset
+      ? findTokenByAddress(network, explicitAsset)
+      : getToken(network, tokenSymbol);
+  } catch (error) {
+    throw invalidArgument(error instanceof Error ? error.message : String(error));
+  }
   const decimalsOption = opt(options, "decimals");
   if (explicitAsset && !registryToken && decimalsOption === undefined) {
-    throw new Error("When --asset is set without a registry match, --decimals must be provided");
+    throw invalidArgument("When --asset is set without a registry match, --decimals must be provided");
   }
-  if (!explicitAsset && !registryToken) throw new Error(`unknown token ${tokenSymbol} on ${network}`);
+  if (!explicitAsset && !registryToken) throw invalidArgument(`unknown token ${tokenSymbol} on ${network}`);
   const isBase = network === "eip155:8453" || network === "eip155:84532";
   if (isBase && !registryToken) {
-    throw new Error("Base support is currently limited to the official USDC contract");
+    throw invalidArgument("Base support is currently limited to the official USDC contract");
   }
-  const decimals = decimalsOption !== undefined ? Number(decimalsOption) : registryToken!.decimals;
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
-  const rawAmount = opt(options, "rawAmount") ?? opt(options, "raw-amount");
+  const decimals = resolveDecimals(registryToken, decimalsOption);
+  const rawAmount = opt(options, "raw-amount");
   const humanAmount = opt(options, "amount");
   if (rawAmount && humanAmount) throw new CliError("INVALID_ARGUMENT", "--amount and --raw-amount are mutually exclusive", "Pass either --amount or --raw-amount, not both.", 2);
-  const amount = rawAmount ? assertRawAmount(rawAmount, "--raw-amount") : toSmallestUnit(humanAmount ?? "0.0001", decimals);
+  const amount = rawAmount
+    ? rawAmountOption(rawAmount, "--raw-amount")
+    : humanAmountOption(humanAmount ?? "0.0001", decimals, "--amount");
   const assetAddress = explicitAsset ?? registryToken!.address;
   const assetTransferMethod =
     registryToken?.assetTransferMethod ?? (isBase ? undefined : "permit2");
@@ -52,14 +115,18 @@ function buildRequirement(options: ParsedOptions): PaymentRequirement {
           : {};
   const maxTimeoutSeconds = Number(opt(options, "valid-for-seconds", "300"));
   if (!Number.isInteger(maxTimeoutSeconds) || maxTimeoutSeconds <= 0 || maxTimeoutSeconds > 86400) {
-    throw new Error("--valid-for-seconds must be an integer between 1 and 86400");
+    throw invalidArgument("--valid-for-seconds must be an integer between 1 and 86400");
+  }
+  const payTo = opt(options, "pay-to") ?? "";
+  if (payTo && !normalizeAddress(network, payTo)) {
+    throw invalidArgument(`invalid --pay-to address for ${network}`);
   }
   return {
     scheme,
     network,
     amount,
     asset: assetAddress,
-    payTo: opt(options, "pay-to") ?? opt(options, "payTo") ?? "",
+    payTo,
     maxTimeoutSeconds,
     extra,
   };
@@ -84,28 +151,33 @@ function requestHeaders(options: ParsedOptions): Headers {
   const headersOut = new Headers();
   for (const header of optAll(options, "header")) {
     const idx = header.indexOf(":");
-    if (idx <= 0) throw new Error(`invalid --header '${header}', expected 'Name: Value'`);
+    if (idx <= 0) throw invalidArgument(`invalid --header '${header}', expected 'Name: Value'`);
     headersOut.set(header.slice(0, idx).trim(), header.slice(idx + 1).trim());
   }
   return headersOut;
 }
 
 function validateAmountLimits(selected: PaymentRequirement, options: ParsedOptions): void {
-  const maxRaw = opt(options, "max-rawAmount") ?? opt(options, "max-raw-amount");
+  const maxRaw = opt(options, "max-raw-amount");
   const maxAmount = opt(options, "max-amount");
-  if (maxRaw && BigInt(selected.amount) > BigInt(assertRawAmount(maxRaw, "--max-raw-amount"))) {
-    throw new Error(`payment raw amount ${selected.amount} exceeds --max-raw-amount ${maxRaw}`);
+  if (maxRaw && BigInt(selected.amount) > BigInt(rawAmountOption(maxRaw, "--max-raw-amount"))) {
+    throw new CliError(
+      "PAYMENT_AMOUNT_TOO_HIGH",
+      `payment raw amount ${selected.amount} exceeds --max-raw-amount ${maxRaw}`,
+      "Increase the max raw amount only if this provider price is expected.",
+      1,
+    );
   }
   if (maxAmount) {
     const token = findTokenByAddress(selected.network, selected.asset);
-    const decimalsOption = opt(options, "decimals");
-    if (!token && decimalsOption === undefined) {
-      throw new Error("cannot evaluate --max-amount for an unknown asset; pass --max-raw-amount or --decimals");
-    }
-    const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
-    if (BigInt(selected.amount) > BigInt(toSmallestUnit(maxAmount, decimals))) {
-      throw new Error(`payment amount exceeds --max-amount ${maxAmount}`);
+    const decimals = resolveDecimals(token, opt(options, "decimals"));
+    if (BigInt(selected.amount) > BigInt(humanAmountOption(maxAmount, decimals, "--max-amount"))) {
+      throw new CliError(
+        "PAYMENT_AMOUNT_TOO_HIGH",
+        `payment amount exceeds --max-amount ${maxAmount}`,
+        "Increase the max amount only if this provider price is expected.",
+        1,
+      );
     }
   }
 }
@@ -117,28 +189,94 @@ function gasfreeFeeLimitRaw(selected: PaymentRequirement, options: ParsedOptions
     throw new CliError("INVALID_ARGUMENT", "--max-gasfree-fee and --max-gasfree-fee-raw are mutually exclusive", "Pass one GasFree fee limit.", 2);
   }
   if (selected.scheme !== "exact_gasfree") {
-    if (maxRaw || maxHuman) throw new Error("GasFree fee limits require an exact_gasfree payment requirement");
+    if (maxRaw || maxHuman) throw invalidArgument("GasFree fee limits require an exact_gasfree payment requirement");
     return undefined;
   }
-  if (maxRaw) return assertRawAmount(maxRaw, "--max-gasfree-fee-raw");
+  if (maxRaw) return rawAmountOption(maxRaw, "--max-gasfree-fee-raw");
   if (!maxHuman) return undefined;
   const token = findTokenByAddress(selected.network, selected.asset);
-  const decimalsOption = opt(options, "decimals");
-  if (!token && decimalsOption === undefined) {
-    throw new Error("cannot evaluate --max-gasfree-fee for an unknown asset; pass --max-gasfree-fee-raw or --decimals");
+  const decimals = resolveDecimals(token, opt(options, "decimals"));
+  return humanAmountOption(maxHuman, decimals, "--max-gasfree-fee");
+}
+
+function invalidRequirement(message: string): CliError {
+  return new CliError(
+    "INVALID_PAYMENT_REQUIREMENT",
+    message,
+    "The server returned an x402 requirement that this CLI cannot safely sign.",
+    1,
+  );
+}
+
+function validateSelectedRequirement(selected: PaymentRequirement, resource: string): void {
+  if (!selected || !["exact", "exact_gasfree"].includes(selected.scheme)) {
+    throw invalidRequirement("unsupported or missing payment scheme");
   }
-  const decimals = decimalsOption !== undefined ? Number(decimalsOption) : token!.decimals;
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error("--decimals must be an integer between 0 and 255");
-  return toSmallestUnit(maxHuman, decimals);
+  if (typeof selected.network !== "string" || (!selected.network.startsWith("eip155:") && !selected.network.startsWith("tron:"))) {
+    throw invalidRequirement("unsupported or missing payment network");
+  }
+  try {
+    assertRawAmount(selected.amount, "payment amount");
+  } catch (error) {
+    throw invalidRequirement(error instanceof Error ? error.message : String(error));
+  }
+  if (!normalizeAddress(selected.network, selected.asset)) {
+    throw invalidRequirement(`invalid asset address for ${selected.network}`);
+  }
+  if (!normalizeAddress(selected.network, selected.payTo)) {
+    throw invalidRequirement(`invalid payTo address for ${selected.network}`);
+  }
+  if (!Number.isInteger(selected.maxTimeoutSeconds) || selected.maxTimeoutSeconds! <= 0 || selected.maxTimeoutSeconds! > 86400) {
+    throw invalidRequirement("maxTimeoutSeconds must be an integer between 1 and 86400");
+  }
+  try {
+    const parsed = new URL(resource);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported protocol");
+  } catch {
+    throw invalidRequirement("resource URL must be an absolute HTTP(S) URL");
+  }
+  if (selected.scheme === "exact_gasfree") {
+    if (!selected.network.startsWith("tron:")) {
+      throw invalidRequirement("exact_gasfree is supported only on TRON networks");
+    }
+    return;
+  }
+  const extra = selected.extra;
+  if (!extra || typeof extra !== "object") {
+    throw invalidRequirement("exact payment requirement is missing scheme metadata");
+  }
+  const transferMethod = extra.assetTransferMethod;
+  if (transferMethod === "permit2") return;
+  if (transferMethod !== undefined) {
+    throw invalidRequirement(`unsupported assetTransferMethod ${String(transferMethod)}`);
+  }
+  if (selected.network.startsWith("eip155:")) {
+    const token = findTokenByAddress(selected.network, selected.asset);
+    if (typeof extra.name !== "string" || !extra.name || typeof extra.version !== "string" || !extra.version) {
+      throw invalidRequirement("EIP-3009 requirement is missing extra.name or extra.version");
+    }
+    if (token && (extra.name !== token.name || extra.version !== token.version)) {
+      throw invalidRequirement("EIP-3009 domain metadata does not match the registered token");
+    }
+    return;
+  }
+  throw invalidRequirement("TRON exact requirement must declare Permit2");
 }
 
 async function serve(options: ParsedOptions): Promise<void> {
   const host = opt(options, "host", "127.0.0.1")!;
-  const port = Number(opt(options, "port", "4020"));
+  const port = positiveIntegerOption(options, "port", 4020);
   const facilitatorUrl = opt(options, "facilitator-url", "https://facilitator.bankofai.io")!;
   const requirement = buildRequirement(options);
-  if (!requirement.payTo) throw new Error("--pay-to is required");
+  if (!requirement.payTo) throw new CliError("MISSING_ARGUMENT", "--pay-to is required", "Pass --pay-to <recipient address>.", 2);
   const resourceUrl = opt(options, "resource-url", `http://${host}:${port}/pay`)!;
+  try {
+    const parsed = new URL(resourceUrl);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("unsupported protocol");
+  } catch {
+    throw invalidArgument("--resource-url must be an absolute HTTP(S) URL");
+  }
+  validateSelectedRequirement(requirement, resourceUrl);
   const challenge = {
     x402Version: 2,
     error: "Payment required",
@@ -226,17 +364,25 @@ async function serve(options: ParsedOptions): Promise<void> {
 
 function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions): PaymentRequirement {
   const network = opt(options, "network");
+  const requiredNetwork = network ? normalizeNetworkOption(network) : undefined;
   const scheme = opt(options, "scheme");
   const token = opt(options, "token");
+  const explicitAsset = opt(options, "asset");
+  const decimals = opt(options, "decimals");
   const selected = accepts.find(req => {
     if (!req || !["exact", "exact_gasfree"].includes(req.scheme) || typeof req.network !== "string" || typeof req.asset !== "string") return false;
     if (req.scheme === "exact_gasfree" && !req.network.startsWith("tron:")) return false;
+    let registryToken;
     try {
-      if (!findTokenByAddress(req.network, req.asset)) return false;
+      registryToken = findTokenByAddress(req.network, req.asset);
     } catch {
       return false;
     }
-    if (network && normalizeNetwork(network) !== req.network) return false;
+    if (!registryToken) {
+      if (!explicitAsset || decimals === undefined || !addressesEqual(req.network, explicitAsset, req.asset)) return false;
+      if (req.network === "eip155:8453" || req.network === "eip155:84532") return false;
+    }
+    if (requiredNetwork && requiredNetwork !== req.network) return false;
     if (scheme && scheme !== req.scheme) return false;
     if (token) {
       let tokenInfo;
@@ -245,7 +391,7 @@ function selectRequirement(accepts: PaymentRequirement[], options: ParsedOptions
       } catch {
         return false;
       }
-      if (tokenInfo.address.toLowerCase() !== req.asset.toLowerCase()) return false;
+      if (!addressesEqual(req.network, tokenInfo.address, req.asset)) return false;
     }
     return true;
   });
@@ -259,11 +405,24 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   if (!/^[A-Z]+$/.test(method) || !["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"].includes(method)) {
     throw new CliError("INVALID_ARGUMENT", `unsupported HTTP method ${method}`, "Use an uppercase standard HTTP method.", 2);
   }
+  const scheme = opt(options, "scheme");
+  if (scheme && !["exact", "exact_gasfree"].includes(scheme)) {
+    throw invalidArgument(`unsupported scheme ${scheme}`);
+  }
+  const network = opt(options, "network");
+  const normalizedNetwork = network ? normalizeNetworkOption(network) : undefined;
+  const decimals = opt(options, "decimals");
+  if (decimals !== undefined) resolveDecimals(undefined, decimals);
+  const asset = opt(options, "asset");
+  if (asset && normalizedNetwork && !normalizeAddress(normalizedNetwork, asset)) {
+    throw invalidArgument(`invalid --asset address for ${normalizedNetwork}`);
+  }
   const baseHeaders = requestHeaders(options);
   const probe = await fetchWithTimeout(url, {
     method,
     headers: baseHeaders,
     body: ["GET", "HEAD"].includes(method.toUpperCase()) ? undefined : opt(options, "body"),
+    redirect: "manual",
   }, timeoutMs(options), `fetch ${url}`);
   if (probe.status !== 402) {
     const body = await responsePayload(probe);
@@ -291,6 +450,9 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   if (!header) throw new Error("402 response missing PAYMENT-REQUIRED header");
   const required = decodeRequired(header);
   const selected = selectRequirement(required.accepts ?? [], options);
+  const resource = required.resource?.url ?? url;
+  validateSelectedRequirement(selected, resource);
+  resolveDecimals(findTokenByAddress(selected.network, selected.asset), opt(options, "decimals"));
   validateAmountLimits(selected, options);
   const maxGasfreeFeeRaw = gasfreeFeeLimitRaw(selected, options);
   if (options["dry-run"]) {
@@ -301,7 +463,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       mode: outputMode(options),
       result: {
         url,
-        resource: required.resource?.url ?? url,
+        resource,
         selected,
         message: "Dry run - no payment submitted",
       },
@@ -311,7 +473,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
   const creation = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
     createPaymentClient({
       selected,
-      resource: required.resource?.url ?? url,
+      resource,
       extensions: required.extensions,
       rpcUrl: opt(options, "rpc-url"),
       privateKey: opt(options, "private-key"),
@@ -326,7 +488,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       cachedProbe = undefined;
       return response;
     }
-    return fetchWithTimeout(input, init, timeoutMs(options), `fetch ${url}`);
+    return fetchWithTimeout(input, { ...init, redirect: "manual" }, timeoutMs(options), `fetch ${url}`);
   };
   const fetchWithPayment = wrapFetchWithPayment(transport, creation.client);
   const paid = await withSdkStdoutRedirect(outputMode(options) === "json", () =>
@@ -380,9 +542,30 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
 }
 
 async function roundtrip(options: ParsedOptions): Promise<void> {
-  const port = Number(opt(options, "port", "4020"));
-  await serve(options);
-  await pay(`http://127.0.0.1:${port}/pay`, options);
+  const port = positiveIntegerOption(options, "port", 4020);
+  if (outputMode(options) !== "json") {
+    await serve(options);
+    await pay(`http://127.0.0.1:${port}/pay`, options);
+    process.exit(0);
+  }
+  const capture = beginEmitCapture();
+  let events;
+  try {
+    await serve(options);
+    await pay(`http://127.0.0.1:${port}/pay`, options);
+    events = capture.finish();
+  } catch (error) {
+    capture.finish();
+    throw error;
+  }
+  emit({
+    command: "roundtrip",
+    mode: "json",
+    result: {
+      serve: events.find(event => event.component === "server")?.result ?? null,
+      pay: events.find(event => event.component === "client")?.result ?? null,
+    },
+  });
   process.exit(0);
 }
 
@@ -406,12 +589,13 @@ async function handleGatewayCatalog(positional: string[], options: ParsedOptions
   if (sub === "build") catalogBuild(target, options);
   else if (sub === "check") gatewayCheck(target, options);
   else if (sub === "pay-assets") catalogPayAssets(target, options);
-  else if (sub === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, requireArgument(positional.slice(2).join(" ") || opt(options, "query"), "query", "x402-cli gateway catalog search <query> [options]"), options);
+  else if (sub === "search") await catalogSearch(opt(options, "catalog", defaultCatalogSource())!, requireArgument(positional.slice(1).join(" ") || opt(options, "query"), "query", "x402-cli gateway catalog search <query> [options]"), options);
   else throw new CliError("UNKNOWN_COMMAND", `Unknown gateway catalog command: ${sub}`, "Run x402-cli gateway catalog --help to list commands.", 2);
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  setInvocationCommand(invocationCommandName(argv));
   const { command, positional, options } = parseArgs(argv);
   if (hasFlag(options, "help") && command === "gateway") {
     await handleGateway(argv.slice(1));
@@ -443,17 +627,21 @@ async function main(): Promise<void> {
   }
 }
 
-function errorCommandName(argv: string[]): string {
-  const [first, second] = argv;
-  if ((first === "catalog" || first === "gateway") && second && !second.startsWith("-")) return `${first} ${second}`;
+function invocationCommandName(argv: string[]): string {
+  const positional = argv.filter(item => !item.startsWith("-"));
+  const [first, second, third] = positional;
+  if (first === "gateway" && second === "catalog" && third) return `${first} ${second} ${third}`;
+  if ((first === "catalog" || first === "gateway") && second) return `${first} ${second}`;
   return first ?? "x402-cli";
 }
 
 main().catch(error => {
+  const friendly = classify(error);
   emit({
-    command: errorCommandName(process.argv.slice(2)),
+    command: invocationCommandName(process.argv.slice(2)),
     mode: process.argv.includes("--json") ? "json" : "human",
-    error: classify(error),
+    error: friendly,
   });
-  process.exit(error instanceof CliError ? error.exitCode : 1);
+  const usageCodes = new Set(["INVALID_ARGUMENT", "MISSING_ARGUMENT", "UNKNOWN_COMMAND"]);
+  process.exit(error instanceof CliError ? error.exitCode : usageCodes.has(friendly.code) ? 2 : 1);
 });
