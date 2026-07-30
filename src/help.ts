@@ -47,6 +47,7 @@ Options:
   --max-amount <amount>     Maximum human-readable payment amount
   --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
+  --wallet-id <id>          Explicit configured Agent Wallet ID
   --private-key <hex>       Override Agent Wallet for development/CI
   --rpc-url <url>           Explicit network RPC URL
   --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)

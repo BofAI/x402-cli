@@ -9,7 +9,6 @@ import {
 import { x402Client } from "@bankofai/x402-core/client";
 import {
   ConfigWalletProvider,
-  resolveWallet,
   resolveWalletProvider,
   type Eip712Capable,
   type Wallet,
@@ -104,28 +103,48 @@ function explicitPrivateKey(names: string[], explicit: string | undefined): `0x$
 
 type SigningWallet = Wallet & Eip712Capable;
 
-async function activeAgentWallet(network: string): Promise<SigningWallet> {
+export type PayerContext = {
+  walletId: string | null;
+  address: string;
+};
+
+type SelectedAgentWallet = {
+  wallet: SigningWallet;
+  payer: PayerContext;
+};
+
+async function activeAgentWallet(network: string, requestedWalletId?: string): Promise<SelectedAgentWallet> {
   let wallet: Wallet;
+  let walletId: string | null = null;
   try {
     const dir = process.env.AGENT_WALLET_DIR?.trim() || undefined;
-    const walletId = process.env.AGENT_WALLET_ID?.trim() || undefined;
+    const explicitWalletId = requestedWalletId?.trim() || process.env.AGENT_WALLET_ID?.trim() || undefined;
     const provider = resolveWalletProvider({
       network,
       ...(dir ? { dir } : {}),
     });
-    if (provider instanceof ConfigWalletProvider && !walletId && !provider.getActiveId()) {
-      throw new CliError(
-        "WALLET_NOT_CONFIGURED",
-        "Agent Wallet has configured wallets but no active wallet",
-        "Set an active Agent Wallet or explicitly select one with AGENT_WALLET_ID.",
-        1,
-      );
+    if (provider instanceof ConfigWalletProvider) {
+      walletId = explicitWalletId ?? provider.getActiveId();
+      if (!walletId) {
+        throw new CliError(
+          "WALLET_NOT_CONFIGURED",
+          "Agent Wallet has configured wallets but no active wallet",
+          "Set an active Agent Wallet or explicitly select one with --wallet-id or AGENT_WALLET_ID.",
+          1,
+        );
+      }
+      wallet = await provider.getWallet(walletId, network);
+    } else {
+      if (explicitWalletId) {
+        throw new CliError(
+          "WALLET_NOT_CONFIGURED",
+          `Agent Wallet '${explicitWalletId}' was requested but no configured wallet directory is available`,
+          "Check AGENT_WALLET_DIR, or remove --wallet-id/AGENT_WALLET_ID when using an environment-backed wallet.",
+          1,
+        );
+      }
+      wallet = await provider.getActiveWallet(network);
     }
-    wallet = await resolveWallet({
-      network,
-      ...(dir ? { dir } : {}),
-      ...(walletId ? { walletId } : {}),
-    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof SyntaxError || /wallets_config|wallet config/i.test(message)) {
@@ -149,7 +168,11 @@ async function activeAgentWallet(network: string): Promise<SigningWallet> {
   if (!("signTypedData" in wallet) || typeof wallet.signTypedData !== "function") {
     throw new Error(`active agent-wallet for ${network} does not support typed-data signing`);
   }
-  return wallet as SigningWallet;
+  const address = await wallet.getAddress();
+  return {
+    wallet: wallet as SigningWallet,
+    payer: { walletId, address },
+  };
 }
 
 function prefixedHex(value: string): `0x${string}` {
@@ -210,39 +233,111 @@ export type CreatePaymentClientArgs = {
   allowanceMode?: string;
   gasfreeApiUrl?: string;
   maxGasfreeFeeRaw?: string;
+  walletId?: string;
 };
+
+const erc20BalanceAbi = [{
+  type: "function",
+  name: "balanceOf",
+  stateMutability: "view",
+  inputs: [{ name: "account", type: "address" }],
+  outputs: [{ name: "", type: "uint256" }],
+}] as const;
+
+async function requireEvmTokenBalance(
+  publicClient: ReturnType<typeof createPublicClient> | undefined,
+  selected: PaymentRequirement,
+  payer: PayerContext,
+): Promise<string | undefined> {
+  if (!publicClient) return undefined;
+  let balance: bigint;
+  try {
+    balance = await publicClient.readContract({
+      address: selected.asset as `0x${string}`,
+      abi: erc20BalanceAbi,
+      functionName: "balanceOf",
+      args: [payer.address as `0x${string}`],
+    });
+  } catch (error) {
+    throw new CliError(
+      "TOKEN_BALANCE_CHECK_FAILED",
+      `failed to read token balance for payer ${payer.address}: ${error instanceof Error ? error.message : String(error)}`,
+      "Check --rpc-url and confirm it serves the selected payment network.",
+      1,
+      { payer, network: selected.network, asset: selected.asset, requiredRaw: selected.amount },
+    );
+  }
+  const required = BigInt(selected.amount);
+  if (balance < required) {
+    throw new CliError(
+      "INSUFFICIENT_TOKEN_BALANCE",
+      `payer ${payer.address} has token balance ${balance} but payment requires ${required}`,
+      "Fund this exact payer address with the advertised token on the selected network, or select another wallet.",
+      1,
+      {
+        payer,
+        network: selected.network,
+        asset: selected.asset,
+        balanceRaw: balance.toString(),
+        requiredRaw: required.toString(),
+      },
+    );
+  }
+  return balance.toString();
+}
 
 export async function createPaymentClient(
   args: CreatePaymentClientArgs,
-): Promise<{ client: x402Client; gasfreeEstimate?: { fee: string; total: string } }> {
+): Promise<{
+  client: x402Client;
+  payer: PayerContext;
+  balanceRaw?: string;
+  gasfreeEstimate?: { fee: string; total: string };
+}> {
   const selected = ensurePermit2(args.selected);
   if (selected.network.startsWith("eip155:")) {
     if (selected.scheme !== "exact") throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
     const privateKey = explicitPrivateKey(["EVM_PRIVATE_KEY", "PRIVATE_KEY"], args.privateKey);
     const rpcUrl = evmRpcUrl(selected.network, args.rpcUrl);
     const publicClient = rpcUrl ? createPublicClient({ transport: http(rpcUrl) }) : undefined;
-    const signer = privateKey
-      ? toClientEvmSigner(privateKeyToAccount(privateKey), publicClient)
-      : toClientEvmSigner(await createAgentWalletEvmSigner(selected.network), publicClient);
+    let signer;
+    let payer: PayerContext;
+    if (privateKey) {
+      const account = privateKeyToAccount(privateKey);
+      signer = toClientEvmSigner(account, publicClient);
+      payer = { walletId: null, address: account.address };
+    } else {
+      const agentWallet = await createAgentWalletEvmSigner(selected.network, args.walletId);
+      signer = toClientEvmSigner(agentWallet.signer, publicClient);
+      payer = agentWallet.payer;
+    }
+    const balanceRaw = await requireEvmTokenBalance(publicClient, selected, payer);
     const scheme = new ExactEvmScheme(signer, rpcUrl ? { rpcUrl } : undefined);
     const client = new x402Client().register(
       selected.network as `${string}:${string}`,
       scheme,
     );
     registerSelectedRequirementPolicy(client, selected);
-    return { client };
+    return { client, payer, ...(balanceRaw !== undefined ? { balanceRaw } : {}) };
   }
   if (selected.network.startsWith("tron:")) {
     const privateKey = explicitPrivateKey(["TRON_PRIVATE_KEY", "PRIVATE_KEY"], args.privateKey);
-    const wallet = privateKey
-      ? await createTronWallet(
+    let wallet;
+    let payer: PayerContext;
+    if (privateKey) {
+      wallet = await createTronWallet(
           privateKey,
           selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined,
-        )
-      : withGasfreeFeeGuard(
-          await activeAgentWallet(selected.network),
+        );
+      payer = { walletId: null, address: await wallet.getAddress() };
+    } else {
+      const agentWallet = await activeAgentWallet(selected.network, args.walletId);
+      wallet = withGasfreeFeeGuard(
+          agentWallet.wallet,
           selected.scheme === "exact_gasfree" ? args.maxGasfreeFeeRaw : undefined,
         );
+      payer = agentWallet.payer;
+    }
     const signer = await createClientTronSigner(wallet, {
       network: selected.network,
       rpcUrl: args.rpcUrl || process.env.TRON_RPC_URL,
@@ -270,29 +365,61 @@ export async function createPaymentClient(
       throw new Error(`unsupported scheme ${selected.scheme} on ${selected.network}`);
     }
     registerSelectedRequirementPolicy(client, selected);
-    return { client, ...(gasfreeEstimate ? { gasfreeEstimate } : {}) };
+    return { client, payer, ...(gasfreeEstimate ? { gasfreeEstimate } : {}) };
   }
   throw new Error(`unsupported network ${selected.network}`);
 }
 
-async function createAgentWalletEvmSigner(network: string) {
-  const wallet = await activeAgentWallet(network);
-  const address = await wallet.getAddress();
-  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
-    throw new Error(`active agent-wallet address is not valid for ${network}: ${address}`);
-  }
-  return {
-    address: address as `0x${string}`,
-    async signTypedData(data: {
+async function createAgentWalletEvmSigner(
+  network: string,
+  requestedWalletId?: string,
+): Promise<{
+  signer: {
+    address: `0x${string}`;
+    signTypedData(data: {
       domain: Record<string, unknown>;
       types: Record<string, unknown>;
       primaryType: string;
       message: Record<string, unknown>;
-    }) {
-      return prefixedHex(await wallet.signTypedData(data));
-    },
-    async signTransaction(transaction: Record<string, unknown>) {
-      return prefixedHex(await wallet.signTransaction(transaction));
+    }): Promise<`0x${string}`>;
+    signTransaction(transaction: Record<string, unknown>): Promise<`0x${string}`>;
+  };
+  payer: PayerContext;
+}> {
+  const selected = await activeAgentWallet(network, requestedWalletId);
+  const { wallet, payer } = selected;
+  const address = payer.address;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    throw new Error(`active agent-wallet address is not valid for ${network}: ${address}`);
+  }
+  return {
+    payer,
+    signer: {
+      address: address as `0x${string}`,
+      async signTypedData(data: {
+        domain: Record<string, unknown>;
+        types: Record<string, unknown>;
+        primaryType: string;
+        message: Record<string, unknown>;
+      }) {
+        const messageFrom = data.message.from;
+        if (
+          typeof messageFrom === "string" &&
+          !addressesEqual(network, address, messageFrom)
+        ) {
+          throw new CliError(
+            "WALLET_ADDRESS_MISMATCH",
+            `selected wallet address ${address} does not match typed-data payer ${messageFrom}`,
+            "Do not sign this payment; reselect the intended wallet and request a fresh payment requirement.",
+            1,
+            { payer, payloadFrom: messageFrom, network },
+          );
+        }
+        return prefixedHex(await wallet.signTypedData(data));
+      },
+      async signTransaction(transaction: Record<string, unknown>) {
+        return prefixedHex(await wallet.signTransaction(transaction));
+      },
     },
   };
 }
@@ -332,7 +459,12 @@ function registerSelectedRequirementPolicy(client: x402Client, selected: Payment
 
 export async function createPaymentPayload(
   args: CreatePaymentClientArgs,
-): Promise<{ payload: unknown; gasfreeEstimate?: { fee: string; total: string } }> {
+): Promise<{
+  payload: unknown;
+  payer: PayerContext;
+  balanceRaw?: string;
+  gasfreeEstimate?: { fee: string; total: string };
+}> {
   const creation = await createPaymentClient(args);
   const required = paymentRequired(
     ensurePermit2(args.selected),
@@ -342,6 +474,8 @@ export async function createPaymentPayload(
   const payload = await creation.client.createPaymentPayload(required as never);
   return {
     payload,
+    payer: creation.payer,
+    ...(creation.balanceRaw !== undefined ? { balanceRaw: creation.balanceRaw } : {}),
     ...(creation.gasfreeEstimate ? { gasfreeEstimate: creation.gasfreeEstimate } : {}),
   };
 }

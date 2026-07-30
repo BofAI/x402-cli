@@ -129,7 +129,10 @@ to the wallet. If configured wallets exist but none is active, the CLI stops
 before signing instead of silently selecting the first available wallet. The
 CLI does not read private keys from `wallets_config.json`.
 Use `AGENT_WALLET_DIR` to select a non-default Agent Wallet directory, or
-`AGENT_WALLET_ID` to explicitly select a configured wallet.
+`--wallet-id`/`AGENT_WALLET_ID` to explicitly select a configured wallet.
+For EVM payments, the CLI checks the selected payer's token balance before
+signing and returns the resolved wallet ID, address, and raw balance in its
+result. The EIP-712 payer must match that same address.
 
 For development and CI only, `--private-key`, `EVM_PRIVATE_KEY`,
 `TRON_PRIVATE_KEY`, or `PRIVATE_KEY` can explicitly override Agent Wallet.

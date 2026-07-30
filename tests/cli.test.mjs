@@ -6,6 +6,7 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { DecryptionError, SigningError } from "@bankofai/agent-wallet";
+import { privateKeyToAccount } from "viem/accounts";
 import { classify } from "../dist/output.js";
 import { signTronTypedData } from "../dist/x402.js";
 import { addressesEqual, findTokenByAddress, getToken, normalizeNetwork } from "../dist/tokens.js";
@@ -60,6 +61,24 @@ async function withServer(handler, fn) {
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+}
+
+async function withEvmRpc(balanceRaw, fn) {
+  return withServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const rpc = JSON.parse(body);
+      let result;
+      if (rpc.method === "eth_chainId") result = "0x14a34";
+      else if (rpc.method === "eth_call") result = `0x${BigInt(balanceRaw).toString(16).padStart(64, "0")}`;
+      else if (rpc.method === "eth_blockNumber") result = "0x1";
+      else result = "0x0";
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+    });
+  }, fn);
 }
 
 function catalogFixture(dir) {
@@ -166,9 +185,14 @@ test("pay dry-run selects Base Sepolia USDC", async () => {
 test("pay uses the active Agent Wallet by default", async () => {
   const walletDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-agent-wallet-"));
   const privateKey = `0x${"01".repeat(32)}`;
+  const expectedAddress = privateKeyToAccount(privateKey).address;
   writeJson(path.join(walletDir, "wallets_config.json"), {
     active_wallet: "base-payer",
     wallets: {
+      first: {
+        type: "raw_secret",
+        params: { source: "private_key", private_key: `0x${"02".repeat(32)}` },
+      },
       "base-payer": {
         type: "raw_secret",
         params: { source: "private_key", private_key: privateKey },
@@ -179,9 +203,100 @@ test("pay uses the active Agent Wallet by default", async () => {
   let requests = 0;
   let paymentSignature;
   try {
-    await withServer((request, response) => {
-      requests += 1;
-      if (requests === 1) {
+    await withEvmRpc(100n, async rpcUrl => {
+      await withServer((request, response) => {
+        requests += 1;
+        if (requests === 1) {
+          const challenge = {
+            x402Version: 2,
+            resource: { url: `http://${request.headers.host}/pay` },
+            accepts: [{
+              scheme: "exact",
+              network: "eip155:84532",
+              amount: "1",
+              asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              payTo: "0x0000000000000000000000000000000000000001",
+              maxTimeoutSeconds: 300,
+              extra: { name: "USDC", version: "2" },
+            }],
+          };
+          response.writeHead(402, {
+            "content-type": "application/json",
+            "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+          });
+          return response.end(JSON.stringify(challenge));
+        }
+
+        paymentSignature = request.headers["payment-signature"];
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "PAYMENT-RESPONSE": Buffer.from(JSON.stringify({
+            success: true,
+            transaction: "agent-wallet-test",
+            network: "eip155:84532",
+          })).toString("base64"),
+        });
+        response.end(JSON.stringify({ ok: true }));
+      }, async base => {
+        const result = await runAsync(
+          [
+            "pay", `${base}/pay`,
+            "--network", "base-sepolia",
+            "--token", "USDC",
+            "--rpc-url", rpcUrl,
+            "--json",
+          ],
+          {
+            env: {
+              AGENT_WALLET_DIR: walletDir,
+              AGENT_WALLET_ID: undefined,
+              AGENT_WALLET_PRIVATE_KEY: undefined,
+              EVM_PRIVATE_KEY: undefined,
+              PRIVATE_KEY: undefined,
+            },
+          },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        const parsed = JSON.parse(result.stdout);
+        assert.equal(parsed.result.paid, true);
+        assert.equal(parsed.result.transaction, "agent-wallet-test");
+        assert.deepEqual(parsed.result.payer, {
+          walletId: "base-payer",
+          address: expectedAddress,
+          balanceRaw: "100",
+        });
+      });
+    });
+
+    assert.equal(requests, 2);
+    assert.equal(typeof paymentSignature, "string");
+    const payload = JSON.parse(Buffer.from(paymentSignature, "base64").toString("utf8"));
+    assert.match(payload.payload.signature, /^0x[0-9a-f]{130}$/i);
+    assert.equal(payload.payload.authorization.from, expectedAddress);
+  } finally {
+    rmSync(walletDir, { recursive: true, force: true });
+  }
+});
+
+test("pay checks the active EVM wallet balance before signing", async () => {
+  const walletDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-agent-wallet-balance-"));
+  const privateKey = `0x${"03".repeat(32)}`;
+  const expectedAddress = privateKeyToAccount(privateKey).address;
+  writeJson(path.join(walletDir, "wallets_config.json"), {
+    active_wallet: "empty-payer",
+    wallets: {
+      "empty-payer": {
+        type: "raw_secret",
+        params: { source: "private_key", private_key: privateKey },
+      },
+    },
+  });
+
+  let requests = 0;
+  try {
+    await withEvmRpc(0n, async rpcUrl => {
+      await withServer((request, response) => {
+        requests += 1;
         const challenge = {
           x402Version: 2,
           resource: { url: `http://${request.headers.host}/pay` },
@@ -199,42 +314,39 @@ test("pay uses the active Agent Wallet by default", async () => {
           "content-type": "application/json",
           "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
         });
-        return response.end(JSON.stringify(challenge));
-      }
-
-      paymentSignature = request.headers["payment-signature"];
-      response.writeHead(200, {
-        "content-type": "application/json",
-        "PAYMENT-RESPONSE": Buffer.from(JSON.stringify({
-          success: true,
-          transaction: "agent-wallet-test",
-          network: "eip155:84532",
-        })).toString("base64"),
-      });
-      response.end(JSON.stringify({ ok: true }));
-    }, async base => {
-      const result = await runAsync(
-        ["pay", `${base}/pay`, "--network", "base-sepolia", "--token", "USDC", "--json"],
-        {
-          env: {
-            AGENT_WALLET_DIR: walletDir,
-            AGENT_WALLET_ID: undefined,
-            AGENT_WALLET_PRIVATE_KEY: undefined,
-            EVM_PRIVATE_KEY: undefined,
-            PRIVATE_KEY: undefined,
+        response.end(JSON.stringify(challenge));
+      }, async base => {
+        const result = await runAsync(
+          [
+            "pay", `${base}/pay`,
+            "--network", "base-sepolia",
+            "--token", "USDC",
+            "--rpc-url", rpcUrl,
+            "--json",
+          ],
+          {
+            env: {
+              AGENT_WALLET_DIR: walletDir,
+              AGENT_WALLET_ID: undefined,
+              AGENT_WALLET_PRIVATE_KEY: undefined,
+              EVM_PRIVATE_KEY: undefined,
+              PRIVATE_KEY: undefined,
+            },
           },
-        },
-      );
-      assert.equal(result.status, 0, result.stderr);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.result.paid, true);
-      assert.equal(parsed.result.transaction, "agent-wallet-test");
+        );
+        assert.equal(result.status, 1);
+        const parsed = JSON.parse(result.stdout);
+        assert.equal(parsed.error.code, "INSUFFICIENT_TOKEN_BALANCE");
+        assert.deepEqual(parsed.error.details, {
+          payer: { walletId: "empty-payer", address: expectedAddress },
+          network: "eip155:84532",
+          asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+          balanceRaw: "0",
+          requiredRaw: "1",
+        });
+      });
     });
-
-    assert.equal(requests, 2);
-    assert.equal(typeof paymentSignature, "string");
-    const payload = JSON.parse(Buffer.from(paymentSignature, "base64").toString("utf8"));
-    assert.match(payload.payload.signature, /^0x[0-9a-f]{130}$/i);
+    assert.equal(requests, 1);
   } finally {
     rmSync(walletDir, { recursive: true, force: true });
   }
@@ -474,50 +586,53 @@ test("pay reports non-2xx gateway responses as failures", async () => {
 
 test("pay preserves settlement details from a failed paid response", async () => {
   let requests = 0;
-  await withServer((request, response) => {
-    requests += 1;
-    if (requests === 1) {
-      const challenge = {
-        x402Version: 2,
-        resource: { url: `http://${request.headers.host}/pay` },
-        accepts: [{
-          scheme: "exact",
-          network: "eip155:97",
-          amount: "1",
-          asset: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
-          payTo: "0x0000000000000000000000000000000000000001",
-          maxTimeoutSeconds: 300,
-          extra: { assetTransferMethod: "permit2" },
-        }],
-      };
-      response.writeHead(402, {
+  await withEvmRpc(100n, async rpcUrl => {
+    await withServer((request, response) => {
+      requests += 1;
+      if (requests === 1) {
+        const challenge = {
+          x402Version: 2,
+          resource: { url: `http://${request.headers.host}/pay` },
+          accepts: [{
+            scheme: "exact",
+            network: "eip155:97",
+            amount: "1",
+            asset: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+            payTo: "0x0000000000000000000000000000000000000001",
+            maxTimeoutSeconds: 300,
+            extra: { assetTransferMethod: "permit2" },
+          }],
+        };
+        response.writeHead(402, {
+          "content-type": "application/json",
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+        });
+        return response.end(JSON.stringify(challenge));
+      }
+      const settlement = { success: true, transaction: "settled-transaction", network: "eip155:97" };
+      response.writeHead(502, {
         "content-type": "application/json",
-        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+        "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(settlement)).toString("base64"),
       });
-      return response.end(JSON.stringify(challenge));
-    }
-    const settlement = { success: true, transaction: "settled-transaction", network: "eip155:97" };
-    response.writeHead(502, {
-      "content-type": "application/json",
-      "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(settlement)).toString("base64"),
+      response.end(JSON.stringify({ error: "upstream failed after payment settlement", settled: true }));
+    }, async base => {
+      const result = await runAsync([
+        "pay", `${base}/pay`, "--json",
+        "--private-key", `0x${"01".repeat(32)}`,
+        "--rpc-url", rpcUrl,
+      ]);
+      assert.equal(result.status, 1, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, "HTTP_ERROR");
+      assert.equal(parsed.error.details.status, 502);
+      assert.equal(parsed.error.details.paid, true);
+      assert.equal(parsed.error.details.settled, true);
+      assert.equal(parsed.error.details.delivered, false);
+      assert.equal(parsed.error.details.transaction, "settled-transaction");
+      assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
+      assert.equal(requests, 2);
     });
-    response.end(JSON.stringify({ error: "upstream failed after payment settlement", settled: true }));
-  }, async base => {
-    const result = await runAsync([
-      "pay", `${base}/pay`, "--json",
-      "--private-key", `0x${"01".repeat(32)}`,
-    ]);
-    assert.equal(result.status, 1, result.stderr);
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.ok, false);
-    assert.equal(parsed.error.code, "HTTP_ERROR");
-    assert.equal(parsed.error.details.status, 502);
-    assert.equal(parsed.error.details.paid, true);
-    assert.equal(parsed.error.details.settled, true);
-    assert.equal(parsed.error.details.delivered, false);
-    assert.equal(parsed.error.details.transaction, "settled-transaction");
-    assert.equal(parsed.error.details.paymentResponse.transaction, "settled-transaction");
-    assert.equal(requests, 2);
   });
 });
 
@@ -1156,45 +1271,48 @@ test("dry-run rejects un-signable requirements and accepts explicit non-Base ass
 
 test("paid request does not forward PAYMENT-SIGNATURE across redirects", async () => {
   let redirectedRequests = 0;
-  await withServer((_request, response) => {
-    redirectedRequests += 1;
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ shouldNotBeReached: true }));
-  }, async redirectedBase => {
-    let originRequests = 0;
-    await withServer((request, response) => {
-      originRequests += 1;
-      if (originRequests === 1) {
-        const challenge = {
-          x402Version: 2,
-          resource: { url: `http://${request.headers.host}/pay` },
-          accepts: [{
-            scheme: "exact",
-            network: "eip155:84532",
-            amount: "1",
-            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            payTo: "0x0000000000000000000000000000000000000001",
-            maxTimeoutSeconds: 300,
-            extra: { name: "USDC", version: "2" },
-          }],
-        };
-        response.writeHead(402, {
-          "content-type": "application/json",
-          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
-        });
-        response.end(JSON.stringify(challenge));
-        return;
-      }
-      assert.equal(typeof request.headers["payment-signature"], "string");
-      response.writeHead(307, { location: `${redirectedBase}/capture` });
-      response.end();
-    }, async originBase => {
-      const result = await runAsync([
-        "pay", `${originBase}/pay`, "--json",
-        "--private-key", `0x${"01".repeat(32)}`,
-      ]);
-      assert.equal(result.status, 1);
-      assert.equal(JSON.parse(result.stdout).error.code, "HTTP_ERROR");
+  await withEvmRpc(100n, async rpcUrl => {
+    await withServer((_request, response) => {
+      redirectedRequests += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ shouldNotBeReached: true }));
+    }, async redirectedBase => {
+      let originRequests = 0;
+      await withServer((request, response) => {
+        originRequests += 1;
+        if (originRequests === 1) {
+          const challenge = {
+            x402Version: 2,
+            resource: { url: `http://${request.headers.host}/pay` },
+            accepts: [{
+              scheme: "exact",
+              network: "eip155:84532",
+              amount: "1",
+              asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              payTo: "0x0000000000000000000000000000000000000001",
+              maxTimeoutSeconds: 300,
+              extra: { name: "USDC", version: "2" },
+            }],
+          };
+          response.writeHead(402, {
+            "content-type": "application/json",
+            "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+          });
+          response.end(JSON.stringify(challenge));
+          return;
+        }
+        assert.equal(typeof request.headers["payment-signature"], "string");
+        response.writeHead(307, { location: `${redirectedBase}/capture` });
+        response.end();
+      }, async originBase => {
+        const result = await runAsync([
+          "pay", `${originBase}/pay`, "--json",
+          "--private-key", `0x${"01".repeat(32)}`,
+          "--rpc-url", rpcUrl,
+        ]);
+        assert.equal(result.status, 1);
+        assert.equal(JSON.parse(result.stdout).error.code, "HTTP_ERROR");
+      });
     });
   });
   assert.equal(redirectedRequests, 0);

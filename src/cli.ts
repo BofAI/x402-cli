@@ -477,6 +477,7 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
       extensions: required.extensions,
       rpcUrl: opt(options, "rpc-url"),
       privateKey: opt(options, "private-key"),
+      walletId: opt(options, "wallet-id"),
       gasfreeApiUrl: opt(options, "gasfree-api-url"),
       maxGasfreeFeeRaw,
     }),
@@ -508,6 +509,10 @@ async function pay(url: string, options: ParsedOptions): Promise<void> {
     paid: settled,
     settled,
     delivered: paid.ok,
+    payer: {
+      ...creation.payer,
+      ...(creation.balanceRaw !== undefined ? { balanceRaw: creation.balanceRaw } : {}),
+    },
     response: body,
     ...(settlement !== undefined ? {
       paymentResponse: settlement,
