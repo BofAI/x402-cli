@@ -125,7 +125,9 @@ includes its transaction information.
 
 By default, `x402-cli pay` resolves the active wallet from
 `@bankofai/agent-wallet` for the selected payment network and delegates signing
-to the wallet. The CLI does not read private keys from `wallets_config.json`.
+to the wallet. If configured wallets exist but none is active, the CLI stops
+before signing instead of silently selecting the first available wallet. The
+CLI does not read private keys from `wallets_config.json`.
 Use `AGENT_WALLET_DIR` to select a non-default Agent Wallet directory, or
 `AGENT_WALLET_ID` to explicitly select a configured wallet.
 

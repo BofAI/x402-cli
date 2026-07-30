@@ -7,7 +7,13 @@ import {
   encodePaymentSignatureHeader,
 } from "@bankofai/x402-core/http";
 import { x402Client } from "@bankofai/x402-core/client";
-import { resolveWallet, type Eip712Capable, type Wallet } from "@bankofai/agent-wallet";
+import {
+  ConfigWalletProvider,
+  resolveWallet,
+  resolveWalletProvider,
+  type Eip712Capable,
+  type Wallet,
+} from "@bankofai/agent-wallet";
 import { ExactEvmScheme, toClientEvmSigner } from "@bankofai/x402-evm";
 import { ExactTronScheme, createClientTronSigner } from "@bankofai/x402-tron";
 import { ExactGasFreeTronScheme, createGasFreeApiClients, getGasFreeApiBaseUrl } from "@bankofai/x402-tron/gasfree";
@@ -101,10 +107,24 @@ type SigningWallet = Wallet & Eip712Capable;
 async function activeAgentWallet(network: string): Promise<SigningWallet> {
   let wallet: Wallet;
   try {
+    const dir = process.env.AGENT_WALLET_DIR?.trim() || undefined;
+    const walletId = process.env.AGENT_WALLET_ID?.trim() || undefined;
+    const provider = resolveWalletProvider({
+      network,
+      ...(dir ? { dir } : {}),
+    });
+    if (provider instanceof ConfigWalletProvider && !walletId && !provider.getActiveId()) {
+      throw new CliError(
+        "WALLET_NOT_CONFIGURED",
+        "Agent Wallet has configured wallets but no active wallet",
+        "Set an active Agent Wallet or explicitly select one with AGENT_WALLET_ID.",
+        1,
+      );
+    }
     wallet = await resolveWallet({
       network,
-      ...(process.env.AGENT_WALLET_DIR ? { dir: process.env.AGENT_WALLET_DIR } : {}),
-      ...(process.env.AGENT_WALLET_ID ? { walletId: process.env.AGENT_WALLET_ID } : {}),
+      ...(dir ? { dir } : {}),
+      ...(walletId ? { walletId } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

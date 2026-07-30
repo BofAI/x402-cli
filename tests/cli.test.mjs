@@ -240,6 +240,68 @@ test("pay uses the active Agent Wallet by default", async () => {
   }
 });
 
+test("pay refuses to silently select the first configured Agent Wallet", async () => {
+  const walletDir = mkdtempSync(path.join(os.tmpdir(), "x402-cli-agent-wallet-no-active-"));
+  writeJson(path.join(walletDir, "wallets_config.json"), {
+    active_wallet: null,
+    wallets: {
+      first: {
+        type: "raw_secret",
+        params: { source: "private_key", private_key: `0x${"01".repeat(32)}` },
+      },
+      intended: {
+        type: "raw_secret",
+        params: { source: "private_key", private_key: `0x${"02".repeat(32)}` },
+      },
+    },
+  });
+
+  let requests = 0;
+  try {
+    await withServer((request, response) => {
+      requests += 1;
+      const challenge = {
+        x402Version: 2,
+        resource: { url: `http://${request.headers.host}/pay` },
+        accepts: [{
+          scheme: "exact",
+          network: "eip155:84532",
+          amount: "1",
+          asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+          payTo: "0x0000000000000000000000000000000000000001",
+          maxTimeoutSeconds: 300,
+          extra: { name: "USDC", version: "2" },
+        }],
+      };
+      response.writeHead(402, {
+        "content-type": "application/json",
+        "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+      });
+      response.end(JSON.stringify(challenge));
+    }, async base => {
+      const result = await runAsync(
+        ["pay", `${base}/pay`, "--network", "base-sepolia", "--token", "USDC", "--json"],
+        {
+          env: {
+            AGENT_WALLET_DIR: walletDir,
+            AGENT_WALLET_ID: undefined,
+            AGENT_WALLET_PRIVATE_KEY: undefined,
+            EVM_PRIVATE_KEY: undefined,
+            PRIVATE_KEY: undefined,
+          },
+        },
+      );
+      assert.equal(result.status, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.error.code, "WALLET_NOT_CONFIGURED");
+      assert.match(parsed.error.message, /no active wallet/i);
+    });
+    assert.equal(requests, 1);
+  } finally {
+    rmSync(walletDir, { recursive: true, force: true });
+  }
+});
+
 test("serve advertises Base USDC exact with EIP-712 domain metadata", async () => {
   const port = 48000 + Math.floor(Math.random() * 1000);
   const started = run([
