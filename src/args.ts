@@ -37,7 +37,12 @@ export function parseArgs(argv: string[]): { command: string; positional: string
     const key = eq > 2 ? item.slice(2, eq) : item.slice(2);
     const inline = eq > 2 ? item.slice(eq + 1) : undefined;
     const next = rest[i + 1];
-    if (inline !== undefined) options[key] = inline;
+    if (inline !== undefined) {
+      if (key === "header") {
+        const current = options[key];
+        options[key] = Array.isArray(current) ? [...current, inline] : current ? [String(current), inline] : [inline];
+      } else options[key] = inline;
+    }
     else if (BOOLEAN_FLAGS.has(key)) options[key] = true;
     else if (!next || next.startsWith("--")) {
       throw new CliError("MISSING_ARGUMENT", `--${key} requires a value`, `Pass --${key} <value>.`, 2);

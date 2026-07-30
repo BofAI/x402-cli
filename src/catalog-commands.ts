@@ -569,7 +569,12 @@ async function catalogPayJson(source: string, name: string, options: ParsedOptio
 export async function handleCatalog(args: string[]): Promise<void> {
   const { command, positional, options } = parseArgs(args);
   if (hasFlag(options, "help") || ["help", "--help", "-h"].includes(command)) {
-    const topic = command === "help" ? positional[0] : command;
+    const topic =
+      command === "help"
+        ? positional[0]
+        : command === "--help" || command === "-h"
+          ? undefined
+          : command;
     process.stdout.write(helpText(topic ? `catalog-${topic}` : "catalog"));
     return;
   }

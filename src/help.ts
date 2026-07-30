@@ -38,6 +38,8 @@ Options:
   --body <body>             Request body for non-GET/HEAD methods
   --network <caip2>         Require a specific network
   --token <symbol>          Require a specific token
+  --asset <address>         Require a specific asset address
+  --decimals <count>        Decimals for an unregistered explicit asset
   --scheme <scheme>         Require a specific x402 scheme
   --gasfree-api-url <url>   Override the TRON GasFree relayer API URL
   --max-gasfree-fee <amt>   Maximum GasFree relayer fee in token units
@@ -45,7 +47,8 @@ Options:
   --max-amount <amount>     Maximum human-readable payment amount
   --max-raw-amount <amount> Maximum smallest-unit payment amount
   --dry-run                 Read requirements but do not sign or pay
-  --private-key <hex>       Explicit payer private key (or PRIVATE_KEY/TRON_PRIVATE_KEY/EVM_PRIVATE_KEY)
+  --wallet-id <id>          Explicit configured Agent Wallet ID
+  --private-key <hex>       Override Agent Wallet for development/CI
   --rpc-url <url>           Explicit network RPC URL
   --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --json                    Print JSON envelope
@@ -53,6 +56,10 @@ Options:
 Examples:
   x402-cli pay https://api.example.com/paid --dry-run --json
   x402-cli pay https://api.example.com/paid --max-amount 0.01
+  x402-cli pay https://api.example.com/paid --network base-mainnet --token USDC
+
+By default, pay uses the active @bankofai/agent-wallet wallet for the selected network.
+Paid requests do not follow HTTP redirects; retry against the final trusted URL explicitly.
 `,
     serve: `Usage:
   x402-cli serve --pay-to <address> [options]
@@ -70,6 +77,7 @@ Options:
   --port <port>             Bind port (default: 4020)
   --resource-url <url>      URL advertised in payment requirements
   --facilitator-url <url>   Facilitator base URL
+  --valid-for-seconds <n>   Payment requirement validity (default: 300)
   --timeout-ms <ms>         Facilitator timeout in milliseconds (default: 30000)
   --daemon                  Run in background and print the child pid
   --json                    Print JSON envelope
@@ -90,6 +98,14 @@ Commands:
   check <providers>         Validate provider.yml files
   scaffold <name>           Write a starter provider.yml
   catalog <command>         Build/check/search gateway catalog assets
+
+Options:
+  --catalog <source>        Catalog path or URL for search
+  --providers <dir>         Provider directory for start/check
+  --host <host>             Gateway bind host
+  --port <port>             Gateway bind port
+  --gateway-bin <path>      Explicit x402-gateway executable
+  --json                    Print JSON envelope
 `,
     "gateway-catalog": `Usage:
   x402-cli gateway catalog <build|check|pay-assets|search> [options]
@@ -99,6 +115,11 @@ Commands:
   check <providers>         Validate local provider.yml files
   pay-assets <providers>    List payable endpoint assets
   search <query>            Search a catalog artifact
+
+Options:
+  --catalog <source>        Catalog path or URL for search
+  --providers <dir>         Provider directory
+  --json                    Print JSON envelope
 `,
     catalog: `Usage:
   x402-cli catalog <update|search|show|endpoints|pay-json|export-gateway|build> [options]
@@ -129,6 +150,22 @@ Options:
   -n, --limit <count>       Search result limit
   --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
   --include-blocked         Include blocked providers in search
+  --json                    Print JSON envelope
+`,
+    "catalog-update": `Usage:
+  x402-cli catalog update [--catalog <source>] [options]
+
+Options:
+  --catalog <source>        Catalog path or URL
+  --timeout-ms <ms>         Network timeout in milliseconds (default: 30000)
+  --json                    Print JSON envelope
+`,
+    "catalog-build": `Usage:
+  x402-cli catalog build <providers> [options]
+
+Options:
+  --output <file>           Write catalog JSON to a file
+  --dist-dir <dir>          Write catalog.json under a directory
   --json                    Print JSON envelope
 `,
     "catalog-show": `Usage:
@@ -168,4 +205,3 @@ Options:
   };
   return sections[topic] ?? sections.root;
 }
-
