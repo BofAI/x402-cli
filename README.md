@@ -1,12 +1,17 @@
 # x402-cli
 
-TypeScript command-line client for BankofAI x402 payments. This version uses
-the npm TypeScript SDK packages only:
+Latest stable release: `@bankofai/x402-cli@1.0.2`
+
+TypeScript command-line client for BankofAI x402 payments.
+
+Runtime dependencies include:
 
 - `@bankofai/x402-core@1.0.1`
 - `@bankofai/x402-evm@1.0.1`
 - `@bankofai/x402-fetch@1.0.1`
 - `@bankofai/x402-tron@1.0.1`
+- `@bankofai/x402-gateway@1.0.2`
+- `@bankofai/agent-wallet@2.4.0`
 
 Stablecoin payments support `scheme=exact` and TRON `scheme=exact_gasfree`.
 The GasFree flow lets the relayer pay network energy while deducting its fee
